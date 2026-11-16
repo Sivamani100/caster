@@ -5,23 +5,130 @@ import { supabase } from '@/lib/supabase'
 import { useCineRoomStore, MovieInfo, ChatMessage, UserPresence } from '@/lib/store'
 import { RealtimeChannel } from '@supabase/supabase-js'
 
+interface WebRTCDiagnosticInfo {
+  targetId: string
+  connectionState: RTCPeerConnectionState
+  iceConnectionState: RTCIceConnectionState
+  signalingState: RTCSignalingState
+  hasAudioTrack: boolean
+  hasVideoTrack: boolean
+  isPolite: boolean
+}
+
 interface SupabaseRoomContextType {
   sendPlaybackControl: (playing: boolean, time: number) => Promise<void>
   sendMovieChange: (movie: MovieInfo) => Promise<void>
   sendChatMessage: (text: string) => Promise<void>
   sendReaction: (emoji: string) => void
   startMedia: (cameraOn: boolean, micOn: boolean) => Promise<MediaStream | null>
-  toggleMic: () => void
+  toggleMic: () => Promise<void>
   toggleCamera: () => Promise<void>
+  restartWebRTC: () => void
+  getDiagnostics: () => WebRTCDiagnosticInfo[]
 }
 
 const SupabaseRoomContext = createContext<SupabaseRoomContextType | null>(null)
+
+// Comprehensive STUN and free TURN fallback configuration
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  // Metered.ca Open Relay free public WebRTC TURN servers
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+]
+
+// Add custom TURN credentials if provided via environment
+if (process.env.NEXT_PUBLIC_TURN_URL) {
+  DEFAULT_ICE_SERVERS.push({
+    urls: process.env.NEXT_PUBLIC_TURN_URL,
+    username: process.env.NEXT_PUBLIC_TURN_USERNAME || undefined,
+    credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL || undefined,
+  })
+}
+
+interface PeerEntry {
+  pc: RTCPeerConnection
+  makingOffer: boolean
+  ignoreOffer: boolean
+  isSettingRemoteAnswerPending: boolean
+  candidateQueue: RTCIceCandidateInit[]
+  isPolite: boolean
+}
+
+/**
+ * Headless Remote Audio Renderer:
+ * Ensures all connected peers' audio streams play uninterruptedly,
+ * irrespective of which UI tabs or viewer tiles are visible.
+ */
+function RemoteAudioRenderer() {
+  const { streams, myId } = useCineRoomStore()
+  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
+
+  // Unlock browser audio autoplay policy upon user interaction
+  useEffect(() => {
+    const unlockAutoplay = () => {
+      audioRefs.current.forEach((el) => {
+        if (el && el.paused) {
+          el.play().catch(() => {})
+        }
+      })
+    }
+
+    window.addEventListener('click', unlockAutoplay, { once: true })
+    window.addEventListener('touchstart', unlockAutoplay, { once: true })
+    window.addEventListener('keydown', unlockAutoplay, { once: true })
+
+    return () => {
+      window.removeEventListener('click', unlockAutoplay)
+      window.removeEventListener('touchstart', unlockAutoplay)
+      window.removeEventListener('keydown', unlockAutoplay)
+    }
+  }, [])
+
+  const remoteEntries = Object.entries(streams).filter(([id]) => id !== myId)
+
+  return (
+    <div className="hidden" aria-hidden="true">
+      {remoteEntries.map(([peerId, stream]) => (
+        <audio
+          key={peerId}
+          autoPlay
+          playsInline
+          ref={(el) => {
+            if (el) {
+              audioRefs.current.set(peerId, el)
+              if (el.srcObject !== stream) {
+                el.srcObject = stream
+              }
+              el.play().catch((err) => {
+                console.warn(`[WebRTC Audio] Remote peer ${peerId} audio autoplay waiting for gesture:`, err.message)
+              })
+            } else {
+              audioRefs.current.delete(peerId)
+            }
+          }}
+        />
+      ))}
+    </div>
+  )
+}
 
 export function SupabaseRoomProvider({ roomId, children }: { roomId: string; children: React.ReactNode }) {
   const channelRef = useRef<RealtimeChannel | null>(null)
   const isSubscribedRef = useRef(false)
   const joinedAtRef = useRef(Date.now())
-  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  const peersRef = useRef<Map<string, PeerEntry>>(new Map())
   const localStreamRef = useRef<MediaStream | null>(null)
 
   const {
@@ -43,6 +150,8 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     setLocalStream,
     setStream,
     removeStream,
+    setWebRTCStatus,
+    setActivePeersCount,
   } = useCineRoomStore()
 
   const myIdRef = useRef(myId)
@@ -56,37 +165,112 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   const hasVideoRef = useRef(hasVideo)
   hasVideoRef.current = hasVideo
 
-  // Helper to create or get an RTCPeerConnection
-  const getOrCreatePeer = useCallback((targetPeerId: string, isInitiator: boolean) => {
+  // Update aggregated store status across all peers
+  const updateAggregatedStatus = useCallback(() => {
+    const peers = Array.from(peersRef.current.values())
+    setActivePeersCount(peers.length)
+
+    if (peers.length === 0) {
+      setWebRTCStatus('disconnected')
+      return
+    }
+
+    const hasConnected = peers.some(
+      (p) => p.pc.iceConnectionState === 'connected' || p.pc.iceConnectionState === 'completed'
+    )
+    const hasChecking = peers.some(
+      (p) => p.pc.iceConnectionState === 'checking' || p.pc.connectionState === 'connecting'
+    )
+    const hasFailed = peers.some(
+      (p) => p.pc.iceConnectionState === 'failed' || p.pc.connectionState === 'failed'
+    )
+
+    if (hasConnected) {
+      setWebRTCStatus('connected')
+    } else if (hasChecking) {
+      setWebRTCStatus('connecting')
+    } else if (hasFailed) {
+      setWebRTCStatus('failed')
+    } else {
+      setWebRTCStatus('disconnected')
+    }
+  }, [setActivePeersCount, setWebRTCStatus])
+
+  /**
+   * Polite Peer WebRTC Connection Factory:
+   * Employs W3C Perfect Negotiation to prevent offer glares,
+   * buffers ICE candidates until remote description is set,
+   * and auto-recovers from ICE disconnects.
+   */
+  const getOrCreatePeer = useCallback((targetPeerId: string): PeerEntry => {
     if (peersRef.current.has(targetPeerId)) {
       return peersRef.current.get(targetPeerId)!
     }
 
+    // Deterministic role: peer with lexicographically lower ID is "polite"
+    const isPolite = myIdRef.current < targetPeerId
+
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+      iceServers: DEFAULT_ICE_SERVERS,
     })
 
-    // Attach local tracks
+    const peerEntry: PeerEntry = {
+      pc,
+      makingOffer: false,
+      ignoreOffer: false,
+      isSettingRemoteAnswerPending: false,
+      candidateQueue: [],
+      isPolite,
+    }
+
+    peersRef.current.set(targetPeerId, peerEntry)
+
+    // Add audio and video transceivers immediately so SDP offers/answers include media sections
+    pc.addTransceiver('audio', { direction: 'sendrecv' })
+    pc.addTransceiver('video', { direction: 'sendrecv' })
+
+    // Attach local media tracks if active
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
-        try {
-          pc.addTrack(track, localStreamRef.current!)
-        } catch {}
+        const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
+        if (sender) {
+          sender.replaceTrack(track).catch(() => {})
+        } else {
+          try {
+            pc.addTrack(track, localStreamRef.current!)
+          } catch {}
+        }
       })
     }
 
-    // When remote track arrives
-    pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        setStream(targetPeerId, event.streams[0])
+    // Perfect Negotiation onnegotiationneeded handler
+    pc.onnegotiationneeded = async () => {
+      try {
+        peerEntry.makingOffer = true
+        await pc.setLocalDescription()
+        if (channelRef.current && pc.localDescription) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'webrtc_signal',
+            payload: {
+              type: 'description',
+              from: myIdRef.current,
+              to: targetPeerId,
+              description: {
+                type: pc.localDescription.type,
+                sdp: pc.localDescription.sdp,
+              },
+            },
+          })
+        }
+      } catch (err) {
+        console.error(`[WebRTC] Perfect negotiation error with ${targetPeerId}:`, err)
+      } finally {
+        peerEntry.makingOffer = false
       }
     }
 
-    // When local candidate is ready
+    // Local ICE candidate generation
     pc.onicecandidate = (event) => {
       if (event.candidate && channelRef.current) {
         channelRef.current.send({
@@ -96,48 +280,146 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             type: 'candidate',
             from: myIdRef.current,
             to: targetPeerId,
-            candidate: event.candidate,
+            candidate: event.candidate.toJSON(),
           },
         })
       }
     }
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        removeStream(targetPeerId)
-        peersRef.current.delete(targetPeerId)
+    // Remote Track Arrival
+    pc.ontrack = (event) => {
+      console.log(`[WebRTC] Received ${event.track.kind} track from ${targetPeerId}`)
+      const stream = event.streams[0] || new MediaStream([event.track])
+
+      // Listen for track unmute
+      event.track.onunmute = () => {
+        console.log(`[WebRTC] Track ${event.track.kind} unmuted from ${targetPeerId}`)
+        setStream(targetPeerId, stream)
       }
+
+      setStream(targetPeerId, stream)
     }
 
-    peersRef.current.set(targetPeerId, pc)
-
-    if (isInitiator) {
-      // Trigger negotiation
-      pc.onnegotiationneeded = async () => {
+    // Connection state & ICE recovery
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[WebRTC] ICE state (${targetPeerId}):`, pc.iceConnectionState)
+      updateAggregatedStatus()
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
         try {
-          const offer = await pc.createOffer()
-          await pc.setLocalDescription(offer)
-          if (channelRef.current) {
-            channelRef.current.send({
-              type: 'broadcast',
-              event: 'webrtc_signal',
-              payload: {
-                type: 'offer',
-                from: myIdRef.current,
-                to: targetPeerId,
-                offer,
-              },
-            })
-          }
+          pc.restartIce()
         } catch (err) {
-          console.warn('WebRTC negotiation error:', err)
+          console.warn(`[WebRTC] ICE restart failed for ${targetPeerId}:`, err)
         }
       }
     }
 
-    return pc
-  }, [setStream, removeStream])
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Connection state (${targetPeerId}):`, pc.connectionState)
+      updateAggregatedStatus()
+      if (pc.connectionState === 'failed') {
+        try {
+          pc.restartIce()
+        } catch {}
+      } else if (pc.connectionState === 'closed') {
+        removeStream(targetPeerId)
+        peersRef.current.delete(targetPeerId)
+        updateAggregatedStatus()
+      }
+    }
 
+    updateAggregatedStatus()
+    return peerEntry
+  }, [setStream, removeStream, updateAggregatedStatus])
+
+  // Flush queued ICE candidates for a peer
+  const flushCandidates = useCallback(async (entry: PeerEntry) => {
+    if (!entry.candidateQueue.length) return
+    const queued = [...entry.candidateQueue]
+    entry.candidateQueue = []
+
+    for (const cand of queued) {
+      try {
+        await entry.pc.addIceCandidate(new RTCIceCandidate(cand))
+      } catch (err) {
+        if (!entry.ignoreOffer) {
+          console.warn('[WebRTC] Candidate flush error:', err)
+        }
+      }
+    }
+  }, [])
+
+  // Handle incoming WebRTC signal with Perfect Negotiation
+  const handleWebRTCSignal = useCallback(
+    async (payload: any) => {
+      if (!payload || payload.from === myIdRef.current || payload.to !== myIdRef.current) {
+        return
+      }
+
+      const senderId = payload.from
+      const entry = getOrCreatePeer(senderId)
+      const pc = entry.pc
+
+      if (payload.type === 'description') {
+        const description: RTCSessionDescriptionInit = payload.description
+        const readyForOffer =
+          !entry.makingOffer &&
+          (pc.signalingState === 'stable' || entry.isSettingRemoteAnswerPending)
+        const offerCollision = description.type === 'offer' && !readyForOffer
+
+        entry.ignoreOffer = !entry.isPolite && offerCollision
+        if (entry.ignoreOffer) {
+          console.warn(`[WebRTC] Impolite peer ${myIdRef.current} ignoring offer collision from ${senderId}`)
+          return
+        }
+
+        entry.isSettingRemoteAnswerPending = description.type === 'answer'
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(description))
+          entry.isSettingRemoteAnswerPending = false
+
+          // Flush any ICE candidates that arrived prior to setRemoteDescription
+          await flushCandidates(entry)
+
+          if (description.type === 'offer') {
+            await pc.setLocalDescription()
+            if (channelRef.current && pc.localDescription) {
+              channelRef.current.send({
+                type: 'broadcast',
+                event: 'webrtc_signal',
+                payload: {
+                  type: 'description',
+                  from: myIdRef.current,
+                  to: senderId,
+                  description: {
+                    type: pc.localDescription.type,
+                    sdp: pc.localDescription.sdp,
+                  },
+                },
+              })
+            }
+          }
+        } catch (err) {
+          console.error(`[WebRTC] Error handling description from ${senderId}:`, err)
+        }
+      } else if (payload.type === 'candidate') {
+        try {
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
+          } else {
+            // Buffer candidate until remote description is set
+            entry.candidateQueue.push(payload.candidate)
+          }
+        } catch (err) {
+          if (!entry.ignoreOffer) {
+            console.warn(`[WebRTC] Error adding ICE candidate from ${senderId}:`, err)
+          }
+        }
+      }
+    },
+    [getOrCreatePeer, flushCandidates]
+  )
+
+  // Initialize Room & Realtime Channel
   useEffect(() => {
     if (!roomId) return
     let isMounted = true
@@ -172,18 +454,21 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         }
       } else if (!room) {
         const defaultMovie = useCineRoomStore.getState().currentMovie
-        await supabase.from('rooms').upsert({
-          id: roomId,
-          host_name: isHostRef.current ? (myNameRef.current || 'Host') : 'Screening Host',
-          host_id: isHostRef.current ? myIdRef.current : 'host-initial',
-          movie_title: defaultMovie.title,
-          movie_url: defaultMovie.url,
-          movie_genre: defaultMovie.genre,
-          movie_duration: defaultMovie.duration || 596,
-          is_playing: true,
-          playback_time: 0,
-          last_updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' })
+        await supabase.from('rooms').upsert(
+          {
+            id: roomId,
+            host_name: isHostRef.current ? myNameRef.current || 'Host' : 'Screening Host',
+            host_id: isHostRef.current ? myIdRef.current : 'host-initial',
+            movie_title: defaultMovie.title,
+            movie_url: defaultMovie.url,
+            movie_genre: defaultMovie.genre,
+            movie_duration: defaultMovie.duration || 596,
+            is_playing: true,
+            playback_time: 0,
+            last_updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        )
       }
 
       // 2. Fetch Chat History
@@ -198,7 +483,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         setMessages(chatData as ChatMessage[])
       }
 
-      // 3. Single Channel Subscription
+      // 3. Single Supabase Channel with broadcast self: false
       const channelTopic = `room:${roomId}`
       const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelTopic}` || c.topic === channelTopic)
       if (existing) {
@@ -213,7 +498,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       })
       channelRef.current = channel
 
-      // Presence
+      // Presence Sync: Automatically initiate WebRTC mesh with all joined peers
       channel.on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState()
         const users: UserPresence[] = []
@@ -224,6 +509,30 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
           }
         }
         setPresenceUsers(users)
+
+        // Ensure peer connection exists for every remote user
+        users.forEach((u) => {
+          if (u.id && u.id !== myIdRef.current) {
+            getOrCreatePeer(u.id)
+          }
+        })
+      })
+
+      // Handle presence leave to clean up disconnected peer
+      channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        if (Array.isArray(leftPresences)) {
+          leftPresences.forEach((p) => {
+            if (p.id) {
+              const entry = peersRef.current.get(p.id)
+              if (entry) {
+                entry.pc.close()
+                peersRef.current.delete(p.id)
+                removeStream(p.id)
+              }
+            }
+          })
+          updateAggregatedStatus()
+        }
       })
 
       // Broadcast Playback Sync
@@ -258,67 +567,9 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         }
       })
 
-      // WebRTC Cloud Signaling
-      channel.on('broadcast', { event: 'webrtc_signal' }, async ({ payload }) => {
-        if (!payload || payload.from === myIdRef.current) return
-
-        if (payload.type === 'peer_ready') {
-          // Announce mutual handshake
-          if (myIdRef.current > payload.from) {
-            getOrCreatePeer(payload.from, true)
-          } else {
-            channel.send({
-              type: 'broadcast',
-              event: 'webrtc_signal',
-              payload: { type: 'peer_ack', from: myIdRef.current, to: payload.from },
-            })
-          }
-        } else if (payload.type === 'peer_ack') {
-          if (payload.to === myIdRef.current) {
-            getOrCreatePeer(payload.from, false)
-          }
-        } else if (payload.type === 'offer') {
-          if (payload.to === myIdRef.current) {
-            try {
-              const pc = getOrCreatePeer(payload.from, false)
-              await pc.setRemoteDescription(new RTCSessionDescription(payload.offer))
-              const answer = await pc.createAnswer()
-              await pc.setLocalDescription(answer)
-              channel.send({
-                type: 'broadcast',
-                event: 'webrtc_signal',
-                payload: {
-                  type: 'answer',
-                  from: myIdRef.current,
-                  to: payload.from,
-                  answer,
-                },
-              })
-            } catch (err) {
-              console.warn('WebRTC handle offer error:', err)
-            }
-          }
-        } else if (payload.type === 'answer') {
-          if (payload.to === myIdRef.current) {
-            const pc = peersRef.current.get(payload.from)
-            if (pc) {
-              try {
-                await pc.setRemoteDescription(new RTCSessionDescription(payload.answer))
-              } catch (err) {
-                console.warn('WebRTC handle answer error:', err)
-              }
-            }
-          }
-        } else if (payload.type === 'candidate') {
-          if (payload.to === myIdRef.current) {
-            const pc = peersRef.current.get(payload.from)
-            if (pc && payload.candidate) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
-              } catch {}
-            }
-          }
-        }
+      // WebRTC Cloud Signaling Handler
+      channel.on('broadcast', { event: 'webrtc_signal' }, ({ payload }) => {
+        handleWebRTCSignal(payload)
       })
 
       // Database Chat Updates
@@ -337,7 +588,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         }
       )
 
-      // Subscribe
+      // Subscribe to channel and track presence
       channel.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           isSubscribedRef.current = true
@@ -349,13 +600,6 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             isHost: isHostRef.current,
             joinedAt: joinedAtRef.current,
           })
-
-          // Broadcast peer ready to connect with anyone already in the room
-          channel.send({
-            type: 'broadcast',
-            event: 'webrtc_signal',
-            payload: { type: 'peer_ready', from: myIdRef.current },
-          })
         }
       })
     }
@@ -365,16 +609,34 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     return () => {
       isMounted = false
       isSubscribedRef.current = false
-      peersRef.current.forEach((pc) => pc.close())
+      peersRef.current.forEach((entry) => entry.pc.close())
       peersRef.current.clear()
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
       }
+      setWebRTCStatus('disconnected')
+      setActivePeersCount(0)
     }
-  }, [roomId, setMovie, setHostInfo, setPlaybackTime, setIsPlaying, setMessages, setPresenceUsers, addMessage, addReaction, getOrCreatePeer])
+  }, [
+    roomId,
+    setMovie,
+    setHostInfo,
+    setPlaybackTime,
+    setIsPlaying,
+    setMessages,
+    setPresenceUsers,
+    addMessage,
+    addReaction,
+    getOrCreatePeer,
+    handleWebRTCSignal,
+    removeStream,
+    updateAggregatedStatus,
+    setWebRTCStatus,
+    setActivePeersCount,
+  ])
 
-  // Track presence changes
+  // Track presence changes when AV state toggles
   useEffect(() => {
     if (channelRef.current && isSubscribedRef.current) {
       channelRef.current.track({
@@ -388,14 +650,41 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     }
   }, [hasVideo, hasAudio])
 
-  // Start Media (Camera & Mic)
-  const startMedia = useCallback(async (cameraOn: boolean, micOn: boolean) => {
-    try {
-      const constraints: MediaStreamConstraints = {
-        audio: true,
-        video: cameraOn ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+  /**
+   * Acquire MediaStream with graceful fallback:
+   * If camera is unavailable or denied, automatically fall back to audio-only.
+   */
+  const startMedia = useCallback(
+    async (cameraOn: boolean, micOn: boolean) => {
+      let stream: MediaStream | null = null
+      let actualVideo = cameraOn
+
+      try {
+        const constraints: MediaStreamConstraints = {
+          audio: true,
+          video: cameraOn
+            ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }
+            : false,
+        }
+        stream = await navigator.mediaDevices.getUserMedia(constraints)
+      } catch (err: any) {
+        console.warn('[WebRTC] Media acquisition warning:', err.name, err.message)
+        // If camera failed or was denied, fallback to audio-only
+        if (cameraOn) {
+          try {
+            console.log('[WebRTC] Falling back to audio-only stream...')
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+            actualVideo = false
+          } catch (audioErr: any) {
+            console.error('[WebRTC] Microphone also unavailable:', audioErr.message)
+          }
+        }
       }
-      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+
+      if (!stream) {
+        return null
+      }
+
       localStreamRef.current = stream
       setLocalStream(stream)
 
@@ -405,85 +694,180 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       })
 
       setHasAudio(micOn)
-      setHasVideo(cameraOn)
+      setHasVideo(actualVideo)
 
-      // Attach tracks to existing peers
-      peersRef.current.forEach((pc) => {
-        stream.getTracks().forEach((track) => {
-          try {
-            pc.addTrack(track, stream)
-          } catch {}
+      // Attach or replace tracks on all active peer connections
+      peersRef.current.forEach((entry) => {
+        const pc = entry.pc
+        stream!.getTracks().forEach((track) => {
+          const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
+          if (sender) {
+            sender.replaceTrack(track).catch(() => {})
+          } else {
+            try {
+              pc.addTrack(track, stream!)
+            } catch {}
+          }
         })
       })
 
-      // Broadcast peer ready
-      if (channelRef.current) {
-        channelRef.current.send({
-          type: 'broadcast',
-          event: 'webrtc_signal',
-          payload: { type: 'peer_ready', from: myIdRef.current },
-        })
-      }
-
       return stream
-    } catch (err) {
-      console.warn('Could not acquire audio/video:', err)
-      return null
-    }
-  }, [setLocalStream, setHasAudio, setHasVideo])
+    },
+    [setLocalStream, setHasAudio, setHasVideo]
+  )
 
-  // Toggle Microphone
-  const toggleMic = useCallback(() => {
+  /**
+   * Toggle Microphone:
+   * Enables/disables local audio track, or requests audio if stream not yet created.
+   */
+  const toggleMic = useCallback(async () => {
     const next = !hasAudioRef.current
-    if (localStreamRef.current) {
+
+    if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
       localStreamRef.current.getAudioTracks().forEach((t) => {
         t.enabled = next
       })
       setHasAudio(next)
+      hasAudioRef.current = next
     } else {
-      // If no local stream exists yet, start audio
-      startMedia(false, true)
+      // If no audio track exists, acquire it
+      await startMedia(hasVideoRef.current, true)
+    }
+
+    // Update presence
+    if (channelRef.current && isSubscribedRef.current) {
+      channelRef.current.track({
+        id: myIdRef.current || `viewer-${Date.now()}`,
+        name: myNameRef.current || 'Viewer',
+        hasVideo: hasVideoRef.current,
+        hasAudio: next,
+        isHost: isHostRef.current,
+        joinedAt: joinedAtRef.current,
+      })
     }
   }, [setHasAudio, startMedia])
 
-  // Toggle Camera
+  /**
+   * Toggle Camera ("Go Live"):
+   * Dynamically acquires or stops video track, replaces it in existing peer connections,
+   * and triggers renegotiation if needed.
+   */
   const toggleCamera = useCallback(async () => {
     const next = !hasVideoRef.current
+
     if (next) {
       try {
         const vStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
         })
         const vTrack = vStream.getVideoTracks()[0]
+
         if (vTrack) {
-          if (localStreamRef.current) {
-            localStreamRef.current.addTrack(vTrack)
-          } else {
+          if (!localStreamRef.current) {
             localStreamRef.current = vStream
             setLocalStream(vStream)
+          } else {
+            // Remove any old dead video tracks
+            localStreamRef.current.getVideoTracks().forEach((t) => {
+              t.stop()
+              localStreamRef.current?.removeTrack(t)
+            })
+            localStreamRef.current.addTrack(vTrack)
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
           }
 
-          // Add to all active peer connections
-          peersRef.current.forEach((pc) => {
-            try {
-              pc.addTrack(vTrack, localStreamRef.current!)
-            } catch {}
+          // Attach to all peer connections (replaceTrack on transceiver/sender or addTrack)
+          peersRef.current.forEach((entry) => {
+            const pc = entry.pc
+            const videoTransceiver = pc
+              .getTransceivers()
+              .find((t) => t.receiver.track.kind === 'video' || t.sender.track?.kind === 'video')
+
+            if (videoTransceiver && videoTransceiver.sender) {
+              videoTransceiver.sender.replaceTrack(vTrack).catch(() => {})
+            } else {
+              const videoSender = pc.getSenders().find((s) => s.track?.kind === 'video')
+              if (videoSender) {
+                videoSender.replaceTrack(vTrack).catch(() => {})
+              } else {
+                try {
+                  pc.addTrack(vTrack, localStreamRef.current!)
+                } catch {}
+              }
+            }
           })
+
+          setHasVideo(true)
+          hasVideoRef.current = true
         }
-        setHasVideo(true)
-      } catch (err) {
-        console.warn('Camera permission denied:', err)
+      } catch (err: any) {
+        console.warn('[WebRTC] Camera permission denied or device not found:', err.message)
       }
     } else {
+      // Turn off camera
       if (localStreamRef.current) {
         localStreamRef.current.getVideoTracks().forEach((t) => {
           t.stop()
           localStreamRef.current?.removeTrack(t)
         })
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
       }
+
+      // Clear video sender on peers
+      peersRef.current.forEach((entry) => {
+        const videoSender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
+        if (videoSender) {
+          videoSender.replaceTrack(null).catch(() => {})
+        }
+      })
+
       setHasVideo(false)
+      hasVideoRef.current = false
+    }
+
+    // Update presence
+    if (channelRef.current && isSubscribedRef.current) {
+      channelRef.current.track({
+        id: myIdRef.current || `viewer-${Date.now()}`,
+        name: myNameRef.current || 'Viewer',
+        hasVideo: next,
+        hasAudio: hasAudioRef.current,
+        isHost: isHostRef.current,
+        joinedAt: joinedAtRef.current,
+      })
     }
   }, [setHasVideo, setLocalStream])
+
+  // Restart WebRTC connections across all peers
+  const restartWebRTC = useCallback(() => {
+    console.log('[WebRTC] Initiating mesh ICE restart...')
+    peersRef.current.forEach((entry) => {
+      try {
+        entry.pc.restartIce()
+      } catch (err) {
+        console.warn('[WebRTC] restartIce error:', err)
+      }
+    })
+  }, [])
+
+  // WebRTC Diagnostics Snapshot
+  const getDiagnostics = useCallback((): WebRTCDiagnosticInfo[] => {
+    const list: WebRTCDiagnosticInfo[] = []
+    peersRef.current.forEach((entry, targetId) => {
+      const pc = entry.pc
+      const senders = pc.getSenders()
+      list.push({
+        targetId,
+        connectionState: pc.connectionState,
+        iceConnectionState: pc.iceConnectionState,
+        signalingState: pc.signalingState,
+        hasAudioTrack: senders.some((s) => s.track?.kind === 'audio' && s.track.enabled),
+        hasVideoTrack: senders.some((s) => s.track?.kind === 'video' && s.track.enabled),
+        isPolite: entry.isPolite,
+      })
+    })
+    return list
+  }, [])
 
   const sendPlaybackControl = useCallback(
     async (playing: boolean, time: number) => {
@@ -628,8 +1012,11 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         startMedia,
         toggleMic,
         toggleCamera,
+        restartWebRTC,
+        getDiagnostics,
       }}
     >
+      <RemoteAudioRenderer />
       {children}
     </SupabaseRoomContext.Provider>
   )
@@ -644,8 +1031,10 @@ export function useSupabaseRoom() {
       sendChatMessage: async () => {},
       sendReaction: () => {},
       startMedia: async () => null,
-      toggleMic: () => {},
+      toggleMic: async () => {},
       toggleCamera: async () => {},
+      restartWebRTC: () => {},
+      getDiagnostics: () => [],
     }
   }
   return context

@@ -26,6 +26,7 @@ import { useSupabaseRoom } from '@/lib/useSupabaseRoom'
 import ScreenChatOverlay from './ScreenChatOverlay'
 import FacecamOverlay from './FacecamOverlay'
 import ChatPanel from './ChatPanel'
+import WebRTCStatusBadge from './WebRTCStatusBadge'
 
 interface VideoPlayerProps {
   roomId: string
@@ -435,8 +436,11 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
             </div>
           </div>
 
-          {/* Right: Switch Stream, Share & Exit Buttons */}
+          {/* Right: WebRTC Mesh Badge, Switch Stream, Share & Exit Buttons */}
           <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+            {/* Live WebRTC Audio/Video Connection Diagnostics Badge */}
+            <WebRTCStatusBadge />
+
             {/* Stream Switcher */}
             <button
               onClick={() => {

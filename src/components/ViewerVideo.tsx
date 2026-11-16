@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
-import { Mic, MicOff } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Mic, MicOff, Video } from 'lucide-react'
 
 interface ViewerVideoProps {
   user: {
@@ -18,25 +18,60 @@ interface ViewerVideoProps {
 export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const [hasLiveVideoTrack, setHasLiveVideoTrack] = useState(false)
 
-  // Attach video stream
+  // Listen for video tracks dynamically
+  useEffect(() => {
+    if (!stream) {
+      setHasLiveVideoTrack(false)
+      return
+    }
+
+    const checkTrackState = () => {
+      const vTracks = stream.getVideoTracks()
+      const hasLive = vTracks.some((t) => t.readyState === 'live')
+      setHasLiveVideoTrack(hasLive)
+    }
+
+    checkTrackState()
+
+    stream.onaddtrack = checkTrackState
+    stream.onremovetrack = checkTrackState
+
+    const vTracks = stream.getVideoTracks()
+    vTracks.forEach((t) => {
+      t.onmute = checkTrackState
+      t.onunmute = checkTrackState
+    })
+
+    return () => {
+      stream.onaddtrack = null
+      stream.onremovetrack = null
+    }
+  }, [stream])
+
+  const shouldRenderVideo = hasLiveVideoTrack || (!!stream && !!user.hasVideo)
+
+  // Explicitly bind MediaStream to <video> and play
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream
+      videoRef.current.play().catch((err) => {
+        console.warn(`[ViewerVideo ${user.name}] Video play waiting for gesture:`, err.message)
+      })
     }
-  }, [stream, user.hasVideo])
+  }, [stream, shouldRenderVideo, user.name])
 
   // Attach and play audio stream for remote participants
   useEffect(() => {
     if (audioRef.current && stream && !isLocal) {
       audioRef.current.srcObject = stream
-      audioRef.current.play().catch(() => {
-        // Will play on user click
+      audioRef.current.play().catch((err) => {
+        console.warn(`[ViewerVideo ${user.name}] Audio play waiting for gesture:`, err.message)
       })
     }
-  }, [stream, isLocal])
+  }, [stream, isLocal, user.name])
 
-  const hasStream = !!stream && user.hasVideo
   const isMuted = user.hasAudio === false
 
   return (
@@ -44,13 +79,13 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
       className="relative rounded-xl overflow-hidden bg-[#101014] border border-white/[0.08] shadow-md flex items-center justify-center select-none w-full h-full"
       style={{ aspectRatio: '16/10' }}
     >
-      {/* Remote Audio Track (Plays even if video is off) */}
+      {/* Remote Audio Track (always active even if video is off) */}
       {!isLocal && stream && (
         <audio ref={audioRef} autoPlay playsInline />
       )}
 
       {/* Video Stream */}
-      {hasStream ? (
+      {shouldRenderVideo ? (
         <video
           ref={videoRef}
           autoPlay
@@ -80,9 +115,16 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
           )}
         </div>
 
-        {/* Mic Status */}
-        <div className="p-0.5 rounded bg-black/60 text-zinc-400">
-          {isMuted ? <MicOff className="w-2.5 h-2.5 text-zinc-500" /> : <Mic className="w-2.5 h-2.5 text-white" />}
+        {/* Mic & Cam Status Badges */}
+        <div className="flex items-center gap-1">
+          {shouldRenderVideo && (
+            <div className="p-0.5 rounded bg-emerald-500/20 text-emerald-400">
+              <Video className="w-2.5 h-2.5" />
+            </div>
+          )}
+          <div className="p-0.5 rounded bg-black/60 text-zinc-400">
+            {isMuted ? <MicOff className="w-2.5 h-2.5 text-zinc-500" /> : <Mic className="w-2.5 h-2.5 text-white" />}
+          </div>
         </div>
       </div>
 

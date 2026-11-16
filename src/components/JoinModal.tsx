@@ -97,8 +97,8 @@ export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
               className="w-full h-full object-cover"
             />
           ) : (
-            <div className="flex flex-col items-center justify-center gap-1.5">
-              <div className="w-11 h-11 rounded-xl bg-white/[0.06] border border-white/[0.1] text-white flex items-center justify-center text-lg font-bold">
+            <div className="flex flex-col items-center justify-center gap-1.5" suppressHydrationWarning>
+              <div className="w-11 h-11 rounded-xl bg-white/[0.06] border border-white/[0.1] text-white flex items-center justify-center text-lg font-bold" suppressHydrationWarning>
                 {name.trim() ? name.charAt(0).toUpperCase() : '🍿'}
               </div>
               <span className="text-[10px] text-zinc-500">Camera off</span>

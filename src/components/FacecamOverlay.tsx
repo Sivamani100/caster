@@ -87,6 +87,9 @@ export default function FacecamOverlay({ showControls = false, isFullscreen = fa
   useEffect(() => {
     if (videoRef.current && localStream) {
       videoRef.current.srcObject = localStream
+      videoRef.current.play().catch((err) => {
+        console.warn('[FacecamOverlay] Local video play waiting for gesture:', err.message)
+      })
     }
   }, [localStream, hasVideo])
 

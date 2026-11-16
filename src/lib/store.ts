@@ -106,6 +106,10 @@ interface CineRoomStore {
   setHasVideo: (v: boolean) => void
   hasAudio: boolean
   setHasAudio: (a: boolean) => void
+  webrtcStatus: 'disconnected' | 'connecting' | 'connected' | 'failed'
+  setWebRTCStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'failed') => void
+  activePeersCount: number
+  setActivePeersCount: (count: number) => void
 }
 
 export const useCineRoomStore = create<CineRoomStore>((set) => ({
@@ -164,4 +168,8 @@ export const useCineRoomStore = create<CineRoomStore>((set) => ({
   setHasVideo: (hasVideo) => set({ hasVideo }),
   hasAudio: true,
   setHasAudio: (hasAudio) => set({ hasAudio }),
+  webrtcStatus: 'disconnected',
+  setWebRTCStatus: (webrtcStatus) => set({ webrtcStatus }),
+  activePeersCount: 0,
+  setActivePeersCount: (activePeersCount) => set({ activePeersCount }),
 }))
