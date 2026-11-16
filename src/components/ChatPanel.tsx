@@ -1,155 +1,167 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Smile } from 'lucide-react'
+import { Send, X } from 'lucide-react'
 import { useCineRoomStore } from '@/lib/store'
-import { getSocket } from '@/lib/socket'
+import { useSupabaseRoom } from '@/lib/useSupabaseRoom'
 
-const REACTIONS = ['❤️', '😂', '😮', '👏', '🔥', '🎉', '😍', '💯']
+const REACTIONS = ['🍿', '❤️', '🔥', '😂', '👏', '💯']
 
 interface ChatPanelProps {
   roomId: string
+  onClose?: () => void
+  isFullscreen?: boolean
 }
 
-export default function ChatPanel({ roomId }: ChatPanelProps) {
+export default function ChatPanel({ roomId, onClose, isFullscreen = false }: ChatPanelProps) {
   const [input, setInput] = useState('')
-  const [showEmoji, setShowEmoji] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { messages, addMessage, myId, myName, myColor, addReaction } = useCineRoomStore()
-  const socket = getSocket()
+
+  const { messages, myId, presenceUsers } = useCineRoomStore()
+  const { sendChatMessage, sendReaction } = useSupabaseRoom()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Listen for chat events
+  // Focus input when user clicks on an on-screen message pill
   useEffect(() => {
-    socket.on('chat-message', (msg) => {
-      addMessage(msg)
-    })
-    socket.on('reaction', (reaction) => {
-      addReaction(reaction)
-    })
-    return () => {
-      socket.off('chat-message')
-      socket.off('reaction')
+    const handleFocusInput = () => {
+      inputRef.current?.focus()
     }
-  }, [socket, addMessage, addReaction])
+    window.addEventListener('focus-chat-input', handleFocusInput)
+    return () => window.removeEventListener('focus-chat-input', handleFocusInput)
+  }, [])
 
-  const sendMessage = () => {
+  const handleSend = async (e?: React.FormEvent) => {
+    e?.preventDefault()
     const text = input.trim()
-    if (!text || !socket.connected) return
-    socket.emit('chat-message', { roomId, message: text })
+    if (!text) return
     setInput('')
+    await sendChatMessage(text)
     inputRef.current?.focus()
   }
 
-  const sendReaction = (emoji: string) => {
-    socket.emit('reaction', { roomId, emoji })
-    setShowEmoji(false)
-  }
-
-  const formatTime = (ts: number) => {
-    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const formatTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    } catch {
+      return ''
+    }
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#13131f] rounded-xl border border-[#1e1e30] overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e30]">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#10b981] animate-pulse" />
-          <span className="text-white font-semibold text-sm">Live Chat</span>
+    <div className="flex flex-col h-full liquid-glass rounded-2xl overflow-hidden shadow-2xl border border-white/[0.12]">
+      {/* Clean Glassmorphic Header */}
+      <div className="h-14 px-5 border-b border-white/[0.08] bg-white/[0.03] flex items-center justify-between flex-shrink-0">
+        <div className="flex items-center gap-2.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#0071e3] shadow-[0_0_10px_#0071e3]" />
+          <span className="text-white font-semibold text-sm tracking-tight">Chat Room</span>
         </div>
-        <span className="text-gray-500 text-xs">{messages.length} messages</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-zinc-300 font-mono bg-white/[0.08] px-3 py-1 rounded-full border border-white/[0.1] shadow-sm">
+            {Math.max(1, presenceUsers.length || 1)} online
+          </span>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
+              title="Close Chat"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+      {/* Normal Clean Scrollbar View with Larger, Roomy, Legible Messages */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3.5 min-h-0">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-600 text-sm space-y-2">
-            <span className="text-3xl">💬</span>
-            <p>Be the first to say something!</p>
+          <div className="flex flex-col items-center justify-center h-full text-center text-zinc-400 text-sm gap-2">
+            <span className="text-2xl">🍿</span>
+            <span className="text-white font-medium text-sm">Movie Room Chat</span>
+            <span className="text-xs text-zinc-500 max-w-[200px]">Send reactions and chat in real-time with everyone watching.</span>
           </div>
         )}
-        {messages.map((msg) => {
-          const isMe = msg.userId === myId
-          return (
-            <div key={msg.id} className={`flex gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
-              {/* Avatar */}
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-1"
-                style={{ backgroundColor: msg.color + '33', color: msg.color, border: `2px solid ${msg.color}` }}
-              >
-                {msg.name.charAt(0).toUpperCase()}
-              </div>
 
-              {/* Bubble */}
-              <div className={`max-w-[75%] ${isMe ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-                {!isMe && (
-                  <span className="text-xs font-medium" style={{ color: msg.color }}>
-                    {msg.name}
-                  </span>
-                )}
-                <div
-                  className={`px-3 py-2 rounded-2xl text-sm break-words ${
-                    isMe
-                      ? 'bg-gradient-to-br from-[#e94560] to-[#8b5cf6] text-white rounded-tr-sm'
-                      : 'bg-[#1e1e30] text-gray-200 rounded-tl-sm'
-                  }`}
-                >
+        {messages.map((msg) => {
+          if (msg.is_system) {
+            return (
+              <div key={msg.id} className="text-center my-2">
+                <span className="text-xs text-zinc-300 bg-white/[0.07] px-3 py-1 rounded-full border border-white/[0.08] shadow-sm">
                   {msg.message}
-                </div>
-                <span className="text-xs text-gray-600">{formatTime(msg.timestamp)}</span>
+                </span>
               </div>
+            )
+          }
+
+          const isMe = msg.user_id === myId
+
+          return (
+            <div
+              key={msg.id}
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
+            >
+              {!isMe && (
+                <span className="text-xs text-zinc-400 font-medium mb-1 px-1">
+                  {msg.name}
+                </span>
+              )}
+              <div
+                className={`px-4.5 py-3 rounded-2xl text-[14.5px] sm:text-[15px] max-w-[85%] break-words leading-relaxed shadow-md ${
+                  isMe
+                    ? 'bg-[#0071e3] text-white rounded-br-sm border border-blue-400/30'
+                    : 'bg-white/[0.08] text-zinc-100 rounded-bl-sm border border-white/[0.12] backdrop-blur-md'
+                }`}
+              >
+                {msg.message}
+              </div>
+              {msg.created_at && (
+                <span className="text-[10px] text-zinc-500 mt-1 px-1 font-mono">
+                  {formatTime(msg.created_at)}
+                </span>
+              )}
             </div>
           )
         })}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Reaction bar (floating) */}
-      {showEmoji && (
-        <div className="flex gap-2 px-4 py-2 border-t border-[#1e1e30] bg-[#0d0d1a] flex-wrap">
-          {REACTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              onClick={() => sendReaction(emoji)}
-              className="text-xl hover:scale-125 transition-transform active:scale-95"
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Subtle Reactions Bar */}
+      <div className="flex items-center justify-center gap-2.5 px-3 py-2.5 border-t border-white/[0.06] bg-black/40 flex-shrink-0">
+        {REACTIONS.map((emoji) => (
+          <button
+            key={emoji}
+            onClick={() => sendReaction(emoji)}
+            className="text-lg hover:scale-130 active:scale-95 transition-transform p-1.5 rounded-xl hover:bg-white/[0.08]"
+            title={`React ${emoji}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
 
-      {/* Input */}
-      <div className="flex items-center gap-2 p-3 border-t border-[#1e1e30] bg-[#0d0d1a]">
-        <button
-          onClick={() => setShowEmoji(!showEmoji)}
-          className={`text-gray-400 hover:text-[#e94560] transition-colors flex-shrink-0 ${showEmoji ? 'text-[#e94560]' : ''}`}
-        >
-          <Smile className="w-5 h-5" />
-        </button>
+      {/* Increased, Roomy Text & Input Field (Antigravity 2.0 / Apple iOS Style) */}
+      <form onSubmit={handleSend} className="p-4 sm:p-4.5 border-t border-white/[0.08] bg-black/60 backdrop-blur-xl flex items-center gap-3 flex-shrink-0">
         <input
           ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-          placeholder="Say something..."
-          className="flex-1 bg-[#1e1e30] border border-[#2a2a40] text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-[#e94560] transition-colors placeholder:text-gray-600"
-          maxLength={500}
+          placeholder="Type a message to the room..."
+          className="flex-1 h-14 px-5 py-3.5 text-[15px] rounded-2xl liquid-glass-input text-white placeholder:text-zinc-400 outline-none font-normal tracking-wide shadow-inner"
+          maxLength={400}
         />
         <button
-          onClick={sendMessage}
+          type="submit"
           disabled={!input.trim()}
-          className="bg-gradient-to-r from-[#e94560] to-[#8b5cf6] p-2 rounded-lg text-white disabled:opacity-40 hover:opacity-90 transition-all active:scale-95 flex-shrink-0"
+          className="h-14 w-14 rounded-2xl btn-action flex items-center justify-center disabled:opacity-30 transition-all flex-shrink-0 shadow-xl hover:scale-105 active:scale-95"
+          title="Send message"
         >
-          <Send className="w-4 h-4" />
+          <Send className="w-5 h-5 text-white" />
         </button>
-      </div>
+      </form>
     </div>
   )
 }

@@ -10,7 +10,7 @@ type PeerMap = Map<string, SimplePeer.Instance>
 export function useWebRTC(roomId: string) {
   const socket = getSocket()
   const peers = useRef<PeerMap>(new Map())
-  const { localStream, setStream, removeStream, myId } = useCineRoomStore()
+  const { localStream, setStream, removeStream } = useCineRoomStore()
 
   const createPeer = useCallback(
     (targetId: string, initiator: boolean, stream: MediaStream | undefined) => {
@@ -41,7 +41,7 @@ export function useWebRTC(roomId: string) {
       })
 
       peer.on('error', (err) => {
-        console.warn(`Peer error (${targetId}):`, err)
+        console.warn(`Peer warning (${targetId}):`, err.message)
         peers.current.delete(targetId)
         removeStream(targetId)
       })
@@ -58,13 +58,11 @@ export function useWebRTC(roomId: string) {
   )
 
   useEffect(() => {
-    // When a new user joins, we initiate a peer connection to them
     socket.on('user-joined', ({ id: targetId }) => {
       if (peers.current.has(targetId)) return
       createPeer(targetId, true, localStream ?? undefined)
     })
 
-    // Receive an offer from a new user
     socket.on('webrtc-offer', ({ fromId, offer }) => {
       let peer = peers.current.get(fromId)
       if (!peer) {
@@ -73,17 +71,14 @@ export function useWebRTC(roomId: string) {
       peer.signal(offer)
     })
 
-    // Receive answer
     socket.on('webrtc-answer', ({ fromId, answer }) => {
       peers.current.get(fromId)?.signal(answer)
     })
 
-    // ICE candidate
     socket.on('webrtc-ice-candidate', ({ fromId, candidate }) => {
       peers.current.get(fromId)?.signal(candidate)
     })
 
-    // User left
     socket.on('user-left', ({ userId }) => {
       peers.current.get(userId)?.destroy()
       peers.current.delete(userId)
@@ -99,7 +94,6 @@ export function useWebRTC(roomId: string) {
     }
   }, [socket, localStream, createPeer, removeStream])
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       peers.current.forEach((peer) => peer.destroy())
@@ -109,11 +103,14 @@ export function useWebRTC(roomId: string) {
 
   const startCamera = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: true
+      })
       useCineRoomStore.getState().setLocalStream(stream)
       useCineRoomStore.getState().setHasVideo(true)
+      useCineRoomStore.getState().setHasAudio(true)
 
-      // Update existing peers with the new stream
       peers.current.forEach((peer) => {
         stream.getTracks().forEach((track) => {
           try {
@@ -124,9 +121,10 @@ export function useWebRTC(roomId: string) {
       })
 
       socket.emit('video-toggle', { roomId, hasVideo: true })
+      socket.emit('audio-toggle', { roomId, hasAudio: true })
       return stream
     } catch (err) {
-      console.error('Camera access denied:', err)
+      console.error('Camera/Mic permission failed:', err)
       return null
     }
   }, [socket, roomId])
@@ -134,12 +132,29 @@ export function useWebRTC(roomId: string) {
   const stopCamera = useCallback(() => {
     const { localStream: ls } = useCineRoomStore.getState()
     if (ls) {
-      ls.getTracks().forEach((t) => t.stop())
-      useCineRoomStore.getState().setLocalStream(null)
+      ls.getVideoTracks().forEach((t) => t.stop())
+      // Keep audio if desired, or stop everything
+      const audioTracks = ls.getAudioTracks()
+      if (audioTracks.length === 0 || !useCineRoomStore.getState().hasAudio) {
+        ls.getTracks().forEach((t) => t.stop())
+        useCineRoomStore.getState().setLocalStream(null)
+      }
       useCineRoomStore.getState().setHasVideo(false)
       socket.emit('video-toggle', { roomId, hasVideo: false })
     }
   }, [socket, roomId])
 
-  return { startCamera, stopCamera }
+  const toggleMic = useCallback(() => {
+    const { localStream: ls, hasAudio } = useCineRoomStore.getState()
+    const newAudioState = !hasAudio
+    if (ls) {
+      ls.getAudioTracks().forEach((t) => {
+        t.enabled = newAudioState
+      })
+    }
+    useCineRoomStore.getState().setHasAudio(newAudioState)
+    socket.emit('audio-toggle', { roomId, hasAudio: newAudioState })
+  }, [socket, roomId])
+
+  return { startCamera, stopCamera, toggleMic }
 }
