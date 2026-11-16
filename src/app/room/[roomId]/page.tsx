@@ -32,7 +32,13 @@ function RoomContent({ roomId }: { roomId: string }) {
         setMyName(storedName)
       }
       setIsHost(isHostStored)
-      setMyId(`user-${Math.floor(Math.random() * 89999 + 10000)}`)
+
+      let uid = sessionStorage.getItem(`cineroom_${roomId}_uid`)
+      if (!uid) {
+        uid = `user-${Math.floor(Math.random() * 89999 + 10000)}`
+        sessionStorage.setItem(`cineroom_${roomId}_uid`, uid)
+      }
+      setMyId(uid)
     }
   }, [roomId, setMyName, setIsHost, setMyId])
 

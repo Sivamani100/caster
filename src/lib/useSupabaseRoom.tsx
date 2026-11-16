@@ -133,6 +133,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
 
   const {
     myId,
+    setMyId,
     myName,
     isHost,
     setHostInfo,
@@ -484,6 +485,17 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       }
 
       // 3. Single Supabase Channel with broadcast self: false
+      let effectiveId = myIdRef.current
+      if (!effectiveId && typeof window !== 'undefined') {
+        effectiveId = sessionStorage.getItem(`cineroom_${roomId}_uid`) || ''
+        if (!effectiveId) {
+          effectiveId = `user-${Math.floor(Math.random() * 89999 + 10000)}`
+          sessionStorage.setItem(`cineroom_${roomId}_uid`, effectiveId)
+        }
+        setMyId(effectiveId)
+        myIdRef.current = effectiveId
+      }
+
       const channelTopic = `room:${roomId}`
       const existing = supabase.getChannels().find((c) => c.topic === `realtime:${channelTopic}` || c.topic === channelTopic)
       if (existing) {
@@ -493,7 +505,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       const channel = supabase.channel(channelTopic, {
         config: {
           broadcast: { self: false },
-          presence: { key: myIdRef.current || `user-${Date.now()}` },
+          presence: { key: effectiveId || `user-${Date.now()}` },
         },
       })
       channelRef.current = channel

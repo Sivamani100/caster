@@ -7,6 +7,15 @@ import { useSupabaseRoom } from '@/lib/useSupabaseRoom'
 
 const REACTIONS = ['🍿', '❤️', '🔥', '😂', '👏', '💯']
 
+const EMOJI_REGEX = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\u200d|\ufe0f|\s)+$/u
+
+function isPureEmoji(str: string): boolean {
+  if (!str) return false
+  const trimmed = str.trim()
+  if (!trimmed) return false
+  return EMOJI_REGEX.test(trimmed) && trimmed.length <= 16
+}
+
 interface ChatPanelProps {
   roomId: string
   onClose?: () => void
@@ -33,6 +42,11 @@ export default function ChatPanel({ roomId, onClose, isFullscreen = false }: Cha
     window.addEventListener('focus-chat-input', handleFocusInput)
     return () => window.removeEventListener('focus-chat-input', handleFocusInput)
   }, [])
+
+  const handleReactionClick = async (emoji: string) => {
+    sendReaction(emoji)
+    await sendChatMessage(emoji)
+  }
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -108,15 +122,21 @@ export default function ChatPanel({ roomId, onClose, isFullscreen = false }: Cha
                   {msg.name}
                 </span>
               )}
-              <div
-                className={`px-4.5 py-3 rounded-2xl text-[14.5px] sm:text-[15px] max-w-[85%] break-words leading-relaxed shadow-md ${
-                  isMe
-                    ? 'bg-[#0071e3] text-white rounded-br-sm border border-blue-400/30'
-                    : 'bg-white/[0.08] text-zinc-100 rounded-bl-sm border border-white/[0.12] backdrop-blur-md'
-                }`}
-              >
-                {msg.message}
-              </div>
+              {isPureEmoji(msg.message) ? (
+                <div className="py-1 px-1 text-3xl sm:text-4xl select-none hover:scale-125 transition-transform animate-float-in drop-shadow-md">
+                  {msg.message}
+                </div>
+              ) : (
+                <div
+                  className={`px-4.5 py-3 rounded-2xl text-[14.5px] sm:text-[15px] max-w-[85%] break-words leading-relaxed shadow-md ${
+                    isMe
+                      ? 'bg-[#0071e3] text-white rounded-br-sm border border-blue-400/30'
+                      : 'bg-white/[0.08] text-zinc-100 rounded-bl-sm border border-white/[0.12] backdrop-blur-md'
+                  }`}
+                >
+                  {msg.message}
+                </div>
+              )}
               {msg.created_at && (
                 <span className="text-[10px] text-zinc-500 mt-1 px-1 font-mono">
                   {formatTime(msg.created_at)}
@@ -133,7 +153,7 @@ export default function ChatPanel({ roomId, onClose, isFullscreen = false }: Cha
         {REACTIONS.map((emoji) => (
           <button
             key={emoji}
-            onClick={() => sendReaction(emoji)}
+            onClick={() => handleReactionClick(emoji)}
             className="text-lg hover:scale-130 active:scale-95 transition-transform p-1.5 rounded-xl hover:bg-white/[0.08]"
             title={`React ${emoji}`}
           >
