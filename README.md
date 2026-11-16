@@ -8,23 +8,24 @@
 
 - 🎬 **Synchronized HLS & Video Streaming** — Millisecond-level synchronized video playback with drift correction, live scrubber, and custom playback controls.
 - 💎 **Antigravity 2.0 Liquid Glass UI** — Ultra-refined, distraction-free cinema aesthetic featuring multi-layered backdrop blur, micro-borders, and floating interactive docks.
-- 💬 **Adaptive On-Screen Chat Pill** — Intelligent floating chat badge anchored to the bottom stage, automatically dodging player controls and collapsing long messages with clean ellipsis truncation.
+- 💬 **Adaptive On-Screen Chat Pill & Big Emojis** — Intelligent floating chat badge anchored to the bottom stage, automatically dodging player controls, truncating long messages with `...`, and popping up large expressive emoji reactions (`🍿`, `🔥`, `❤️`).
 - 🗂️ **Integrated 1/4 Screen Cinema Drawer** — Expanding full-height chat sidebar dynamically reflowing the video stage to 75% without obscuring subtitles or video framing.
 - 📹 **Customizable Facecam Overlay** — Real-time WebRTC facecam with adjustable opacity (15% - 100%), variable size scaling (120px - 340px), shape morphing (squircle, rounded, circle), mirror flip, and live mic status indicators.
-- 🎙️ **Peer-to-Peer Voice & WebRTC Mesh** — Low-latency audio/video mesh for viewer tiles and real-time host streaming.
+- 🎙️ **Peer-to-Peer Voice & WebRTC Mesh** — Low-latency audio/video mesh powered by W3C Perfect Negotiation, STUN + Metered TURN relay fallback, and persistent headless remote audio.
+- 🩺 **WebRTC Real-Time Diagnostics Badge** — Built-in visual network health indicator with ICE connection states, active peer monitor, and one-click audio resume / ICE restart.
 - ⚡ **Supabase Real-Time Engine** — Robust state synchronization for room metadata, playback time, play/pause state, and message persistence.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Framework**: Next.js 14 (App Router) + React 18
+- **Framework**: Next.js 16 (App Router) + React 19
 - **Styling**: Tailwind CSS + Antigravity 2.0 Glassmorphic Tokens (`backdrop-filter`, luminous borders)
 - **Icons**: Lucide React
 - **State Management**: Zustand
 - **Media Engine**: HLS.js
-- **Real-Time Sync**: Supabase Realtime + Socket.io Signaling
-- **Voice / Video**: WebRTC (simple-peer)
+- **Real-Time Sync**: Supabase Realtime
+- **Voice / Video**: Native WebRTC (W3C Perfect Negotiation + Metered TURN Fallback)
 
 ---
 
