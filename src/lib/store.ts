@@ -35,22 +35,22 @@ export const CURATED_MOVIES: MovieInfo[] = [
     duration: 596,
   },
   {
-    title: 'Tears of Steel (Sci-Fi VFX)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-    genre: 'Sci-Fi',
+    title: 'Tears of Steel (Sci-Fi VFX 4K)',
+    url: 'https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8',
+    genre: 'Sci-Fi VFX',
     duration: 734,
   },
   {
-    title: 'Sintel (Fantasy Saga)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-    genre: 'Fantasy',
-    duration: 888,
+    title: 'Oceans (Disney Nature 1080p)',
+    url: 'https://vjs.zencdn.net/v/oceans.mp4',
+    genre: 'Documentary',
+    duration: 47,
   },
   {
-    title: 'Elephants Dream (Classic)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-    genre: 'Surreal',
-    duration: 653,
+    title: 'Sintel (Fantasy Saga HD)',
+    url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+    genre: 'Fantasy Saga',
+    duration: 52,
   },
 ]
 

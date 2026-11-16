@@ -673,9 +673,20 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
 
       try {
         const constraints: MediaStreamConstraints = {
-          audio: true,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 2,
+          },
           video: cameraOn
-            ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }
+            ? {
+                width: { ideal: 1280, min: 640 },
+                height: { ideal: 720, min: 480 },
+                frameRate: { ideal: 30, min: 24 },
+                facingMode: 'user',
+              }
             : false,
         }
         stream = await navigator.mediaDevices.getUserMedia(constraints)
@@ -770,7 +781,12 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     if (next) {
       try {
         const vStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+          video: {
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
+            frameRate: { ideal: 30, min: 24 },
+            facingMode: 'user',
+          },
         })
         const vTrack = vStream.getVideoTracks()[0]
 

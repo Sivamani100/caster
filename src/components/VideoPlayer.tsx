@@ -87,16 +87,29 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     const video = videoRef.current
     if (!video) return
 
-    if (Math.abs(video.currentTime - playbackTime) > 1.2) {
+    // Drift correction: only adjust if drift exceeds 2.2 seconds to prevent audio stutter
+    if (Math.abs(video.currentTime - playbackTime) > 2.2) {
       try {
         video.currentTime = playbackTime
       } catch {}
     }
 
     if (isPlaying) {
-      video.play().catch(() => {})
+      if (video.paused) {
+        const p = video.play()
+        if (p !== undefined) {
+          p.catch(() => {
+            // If browser blocks unmuted playback, mute and resume seamlessly
+            video.muted = true
+            setIsMuted(true)
+            video.play().catch(() => {})
+          })
+        }
+      }
     } else {
-      video.pause()
+      if (!video.paused) {
+        video.pause()
+      }
     }
   }, [isPlaying, playbackTime])
 
@@ -118,7 +131,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     }
   }, [])
 
-  // Mount stream
+  // Mount stream — ONLY re-mounts when the actual movie URL changes
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -128,11 +141,21 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
 
     const onReady = () => {
       setIsLoading(false)
-      if (playbackTime > 0) {
-        video.currentTime = playbackTime
+      const targetTime = useCineRoomStore.getState().playbackTime
+      if (targetTime > 0) {
+        try {
+          video.currentTime = targetTime
+        } catch {}
       }
-      if (isPlaying) {
-        video.play().catch(() => {})
+      if (useCineRoomStore.getState().isPlaying) {
+        const p = video.play()
+        if (p !== undefined) {
+          p.catch(() => {
+            video.muted = true
+            setIsMuted(true)
+            video.play().catch(() => {})
+          })
+        }
       }
     }
 
@@ -143,6 +166,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
+        backBufferLength: 90,
       })
       hlsRef.current = hls
       hls.loadSource(streamUrl)
@@ -165,7 +189,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
         hlsRef.current = null
       }
     }
-  }, [currentMovie.url, isPlaying, playbackTime])
+  }, [currentMovie.url])
 
   const hideControlsAfterDelay = () => {
     if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
