@@ -1,7 +1,8 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+import type { NextConfig } from 'next'
+
+const nextConfig: NextConfig = {
   reactStrictMode: false,
   devIndicators: false,
 }
 
-module.exports = nextConfig
+export default nextConfig

@@ -4,7 +4,8 @@ let socket: Socket | null = null
 
 export function getSocket(): Socket {
   if (!socket) {
-    socket = io('http://localhost:3001', {
+    const url = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001'
+    socket = io(url, {
       transports: ['websocket'],
       autoConnect: false,
     })
