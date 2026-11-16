@@ -50,7 +50,14 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     presenceUsers,
   } = useCineRoomStore()
 
-  const { sendPlaybackControl, sendMovieChange, toggleMic, toggleCamera } = useSupabaseRoom()
+  const {
+    sendPlaybackControl,
+    sendPlaybackHeartbeat,
+    requestPlaybackSync,
+    sendMovieChange,
+    toggleMic,
+    toggleCamera,
+  } = useSupabaseRoom()
 
   const [cameraLoading, setCameraLoading] = useState(false)
   const [isMuted, setIsMuted] = useState(true)
@@ -87,8 +94,8 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     const video = videoRef.current
     if (!video) return
 
-    // Drift correction: only adjust if drift exceeds 2.2 seconds to prevent audio stutter
-    if (Math.abs(video.currentTime - playbackTime) > 2.2) {
+    // Drift correction: snap if drift exceeds 1.2 seconds
+    if (Math.abs(video.currentTime - playbackTime) > 1.2) {
       try {
         video.currentTime = playbackTime
       } catch {}
@@ -112,6 +119,73 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
       }
     }
   }, [isPlaying, playbackTime])
+
+  // Host: Continuous 2-second heartbeat broadcast
+  useEffect(() => {
+    if (!isHost) return
+    const interval = setInterval(() => {
+      const video = videoRef.current
+      if (video && !video.paused) {
+        sendPlaybackHeartbeat(video.currentTime, !video.paused)
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [isHost, sendPlaybackHeartbeat])
+
+  // Host: Immediately respond with exact current video time when a viewer joins
+  useEffect(() => {
+    const handleRespond = () => {
+      const video = videoRef.current
+      if (video && isHost) {
+        sendPlaybackControl(!video.paused, video.currentTime)
+      }
+    }
+    window.addEventListener('cineroom:respond_sync_request', handleRespond)
+    return () => window.removeEventListener('cineroom:respond_sync_request', handleRespond)
+  }, [isHost, sendPlaybackControl])
+
+  // Viewer: Request sync immediately on mount and after short buffer
+  useEffect(() => {
+    if (!isHost) {
+      requestPlaybackSync()
+      const t = setTimeout(() => requestPlaybackSync(), 1200)
+      return () => clearTimeout(t)
+    }
+  }, [isHost, requestPlaybackSync])
+
+  // Viewer: Continuous sub-second lockstep sync handler
+  useEffect(() => {
+    const handleHeartbeat = (e: Event) => {
+      const { currentTime: targetTime, isPlaying: hostPlaying, isHardSync } = (e as CustomEvent).detail
+      const video = videoRef.current
+      if (!video || isHost) return
+
+      const drift = Math.abs(video.currentTime - targetTime)
+
+      // Snap directly if hard sync or drift > 1.2s
+      if (isHardSync || drift > 1.2) {
+        video.currentTime = targetTime
+      } else if (drift > 0.25) {
+        // Micro-rate adjustment (eliminates stutter and keeps exact sub-second sync)
+        video.playbackRate = targetTime > video.currentTime ? 1.05 : 0.95
+      } else {
+        video.playbackRate = 1.0
+      }
+
+      if (hostPlaying && video.paused) {
+        video.play().catch(() => {
+          video.muted = true
+          setIsMuted(true)
+          video.play().catch(() => {})
+        })
+      } else if (!hostPlaying && !video.paused) {
+        video.pause()
+      }
+    }
+
+    window.addEventListener('cineroom:playback_heartbeat', handleHeartbeat)
+    return () => window.removeEventListener('cineroom:playback_heartbeat', handleHeartbeat)
+  }, [isHost])
 
   // Track local time updates
   useEffect(() => {
@@ -658,46 +732,59 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                 {/* Mic Mute / Unmute Toggle */}
                 <button
                   onClick={toggleMic}
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     hasAudio
-                      ? 'glass-capsule text-white hover:bg-white/15'
-                      : 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
+                      ? 'glass-capsule text-white border border-emerald-500/30 hover:bg-emerald-500/10'
+                      : 'bg-rose-500/20 border border-rose-500/50 text-rose-300 hover:bg-rose-500/30'
                   }`}
                   title={hasAudio ? 'Mute Microphone' : 'Unmute Microphone'}
                 >
                   {hasAudio ? (
-                    <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Mic On</span>
+                    </>
                   ) : (
-                    <MicOff className="w-3.5 h-3.5 text-rose-400" />
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                      <MicOff className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Muted</span>
+                    </>
                   )}
-                  <span className="hidden sm:inline">{hasAudio ? 'Mute' : 'Muted'}</span>
                 </button>
 
                 {/* Go Live / Camera Toggle */}
                 <button
                   onClick={handleCameraToggle}
                   disabled={cameraLoading}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md ${
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     hasVideo
-                      ? 'glass-capsule bg-white/20 text-white border border-white/25 hover:bg-white/30'
-                      : 'btn-action'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                      : 'btn-action text-white hover:brightness-110'
                   }`}
                   title={hasVideo ? 'Stop Camera Overlay' : 'Go Live (Show Webcam on Screen)'}
                 >
                   {cameraLoading ? (
                     <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : hasVideo ? (
-                    <CameraOff className="w-3.5 h-3.5" />
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <CameraOff className="w-3.5 h-3.5 text-emerald-300" />
+                      <span>Live Cam</span>
+                    </>
                   ) : (
-                    <Camera className="w-3.5 h-3.5" />
+                    <>
+                      <Camera className="w-3.5 h-3.5 text-white" />
+                      <span>Go Live</span>
+                    </>
                   )}
-                  <span>{hasVideo ? 'Stop Cam' : 'Go Live'}</span>
                 </button>
 
                 {/* Chat Toggle Button */}
                 <button
                   onClick={() => setShowFullscreenChat(!showFullscreenChat)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     showFullscreenChat
                       ? 'bg-[#0071e3] text-white'
                       : 'glass-capsule text-zinc-300 hover:text-white'

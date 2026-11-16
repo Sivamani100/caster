@@ -84,13 +84,13 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
         <audio ref={audioRef} autoPlay playsInline />
       )}
 
-      {/* Video Stream */}
+      {/* Video Stream - Always muted={true} so browser autoplay never blocks live 30fps frames */}
       {shouldRenderVideo ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal}
+          muted={true}
           className="w-full h-full object-cover"
         />
       ) : (

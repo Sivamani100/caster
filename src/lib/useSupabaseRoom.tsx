@@ -17,6 +17,8 @@ interface WebRTCDiagnosticInfo {
 
 interface SupabaseRoomContextType {
   sendPlaybackControl: (playing: boolean, time: number) => Promise<void>
+  sendPlaybackHeartbeat: (time: number, isPlaying: boolean) => void
+  requestPlaybackSync: () => void
   sendMovieChange: (movie: MovieInfo) => Promise<void>
   sendChatMessage: (text: string) => Promise<void>
   sendReaction: (emoji: string) => void
@@ -69,13 +71,14 @@ interface PeerEntry {
 /**
  * Headless Remote Audio Renderer:
  * Ensures all connected peers' audio streams play uninterruptedly,
- * irrespective of which UI tabs or viewer tiles are visible.
+ * using an unthrottled fixed offscreen container with persistent
+ * gesture listeners to safely unlock browser autoplay policies.
  */
 function RemoteAudioRenderer() {
   const { streams, myId } = useCineRoomStore()
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
 
-  // Unlock browser audio autoplay policy upon user interaction
+  // Continuously unlock browser audio autoplay upon user interaction
   useEffect(() => {
     const unlockAutoplay = () => {
       audioRefs.current.forEach((el) => {
@@ -85,11 +88,13 @@ function RemoteAudioRenderer() {
       })
     }
 
-    window.addEventListener('click', unlockAutoplay, { once: true })
-    window.addEventListener('touchstart', unlockAutoplay, { once: true })
-    window.addEventListener('keydown', unlockAutoplay, { once: true })
+    window.addEventListener('pointerdown', unlockAutoplay)
+    window.addEventListener('click', unlockAutoplay)
+    window.addEventListener('touchstart', unlockAutoplay)
+    window.addEventListener('keydown', unlockAutoplay)
 
     return () => {
+      window.removeEventListener('pointerdown', unlockAutoplay)
       window.removeEventListener('click', unlockAutoplay)
       window.removeEventListener('touchstart', unlockAutoplay)
       window.removeEventListener('keydown', unlockAutoplay)
@@ -99,7 +104,18 @@ function RemoteAudioRenderer() {
   const remoteEntries = Object.entries(streams).filter(([id]) => id !== myId)
 
   return (
-    <div className="hidden" aria-hidden="true">
+    <div
+      style={{
+        position: 'fixed',
+        top: -9999,
+        left: -9999,
+        width: 1,
+        height: 1,
+        opacity: 0.001,
+        pointerEvents: 'none',
+      }}
+      aria-hidden="true"
+    >
       {remoteEntries.map(([peerId, stream]) => (
         <audio
           key={peerId}
@@ -111,8 +127,9 @@ function RemoteAudioRenderer() {
               if (el.srcObject !== stream) {
                 el.srcObject = stream
               }
+              el.volume = 1.0
               el.play().catch((err) => {
-                console.warn(`[WebRTC Audio] Remote peer ${peerId} audio autoplay waiting for gesture:`, err.message)
+                console.warn(`[WebRTC Audio] Peer ${peerId} audio waiting for gesture:`, err.message)
               })
             } else {
               audioRefs.current.delete(peerId)
@@ -130,6 +147,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   const joinedAtRef = useRef(Date.now())
   const peersRef = useRef<Map<string, PeerEntry>>(new Map())
   const localStreamRef = useRef<MediaStream | null>(null)
+  const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map())
 
   const {
     myId,
@@ -198,8 +216,61 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   }, [setActivePeersCount, setWebRTCStatus])
 
   /**
+   * Optimize RTP Senders for Studio Voice & 720p/1080p Video
+   */
+  const optimizeSenders = useCallback((pc: RTCPeerConnection) => {
+    pc.getSenders().forEach((s) => {
+      if (s.track?.kind === 'video' && s.setParameters) {
+        try {
+          const p = s.getParameters()
+          if (!p.encodings || p.encodings.length === 0) p.encodings = [{}]
+          p.encodings[0].maxBitrate = 1500000 // 1.5 Mbps for 720p HD
+          s.setParameters(p).catch(() => {})
+        } catch {}
+      } else if (s.track?.kind === 'audio' && s.setParameters) {
+        try {
+          const p = s.getParameters()
+          if (!p.encodings || p.encodings.length === 0) p.encodings = [{}]
+          p.encodings[0].maxBitrate = 96000 // 96 kbps Opus studio voice
+          s.setParameters(p).catch(() => {})
+        } catch {}
+      }
+    })
+  }, [])
+
+  /**
+   * Explicit renegotiation trigger: generates local description and broadcasts offer
+   */
+  const renegotiatePeer = useCallback(async (entry: PeerEntry, targetPeerId: string) => {
+    try {
+      entry.makingOffer = true
+      await entry.pc.setLocalDescription()
+      if (channelRef.current && entry.pc.localDescription) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc_signal',
+          payload: {
+            type: 'description',
+            from: myIdRef.current,
+            to: targetPeerId,
+            description: {
+              type: entry.pc.localDescription.type,
+              sdp: entry.pc.localDescription.sdp,
+            },
+          },
+        })
+      }
+    } catch (err) {
+      console.warn(`[WebRTC] Renegotiate peer ${targetPeerId} error:`, err)
+    } finally {
+      entry.makingOffer = false
+    }
+  }, [])
+
+  /**
    * Polite Peer WebRTC Connection Factory:
    * Employs W3C Perfect Negotiation to prevent offer glares,
+   * maintains persistent multi-track MediaStreams per peer,
    * buffers ICE candidates until remote description is set,
    * and auto-recovers from ICE disconnects.
    */
@@ -242,6 +313,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
           } catch {}
         }
       })
+      optimizeSenders(pc)
     }
 
     // Perfect Negotiation onnegotiationneeded handler
@@ -287,18 +359,46 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       }
     }
 
-    // Remote Track Arrival
+    // Remote Track Arrival - Unified multi-track MediaStream management
     pc.ontrack = (event) => {
       console.log(`[WebRTC] Received ${event.track.kind} track from ${targetPeerId}`)
-      const stream = event.streams[0] || new MediaStream([event.track])
-
-      // Listen for track unmute
-      event.track.onunmute = () => {
-        console.log(`[WebRTC] Track ${event.track.kind} unmuted from ${targetPeerId}`)
-        setStream(targetPeerId, stream)
+      let peerStream = remoteStreamsRef.current.get(targetPeerId)
+      if (!peerStream) {
+        peerStream = new MediaStream()
+        remoteStreamsRef.current.set(targetPeerId, peerStream)
       }
 
-      setStream(targetPeerId, stream)
+      // Replace existing track of same kind if already present
+      const existingTrack = peerStream.getTracks().find((t) => t.kind === event.track.kind)
+      if (existingTrack && existingTrack.id !== event.track.id) {
+        peerStream.removeTrack(existingTrack)
+      }
+      if (!peerStream.getTracks().some((t) => t.id === event.track.id)) {
+        peerStream.addTrack(event.track)
+      }
+
+      const syncStream = () => {
+        const fresh = new MediaStream(peerStream!.getTracks())
+        setStream(targetPeerId, fresh)
+      }
+
+      event.track.onunmute = () => {
+        console.log(`[WebRTC] Track unmuted (${event.track.kind}) from ${targetPeerId}`)
+        syncStream()
+      }
+
+      event.track.onmute = () => {
+        console.log(`[WebRTC] Track muted (${event.track.kind}) from ${targetPeerId}`)
+        syncStream()
+      }
+
+      event.track.onended = () => {
+        console.log(`[WebRTC] Track ended (${event.track.kind}) from ${targetPeerId}`)
+        peerStream?.removeTrack(event.track)
+        syncStream()
+      }
+
+      syncStream()
     }
 
     // Connection state & ICE recovery
@@ -322,6 +422,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
           pc.restartIce()
         } catch {}
       } else if (pc.connectionState === 'closed') {
+        remoteStreamsRef.current.delete(targetPeerId)
         removeStream(targetPeerId)
         peersRef.current.delete(targetPeerId)
         updateAggregatedStatus()
@@ -330,7 +431,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
 
     updateAggregatedStatus()
     return peerEntry
-  }, [setStream, removeStream, updateAggregatedStatus])
+  }, [setStream, removeStream, updateAggregatedStatus, optimizeSenders])
 
   // Flush queued ICE candidates for a peer
   const flushCandidates = useCallback(async (entry: PeerEntry) => {
@@ -547,13 +648,49 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         }
       })
 
-      // Broadcast Playback Sync
+      // Broadcast Playback Sync (Direct Play / Pause / Seek)
       channel.on('broadcast', { event: 'playback_sync' }, ({ payload }) => {
         if (!payload) return
         setIsPlaying(payload.isPlaying)
         setPlaybackTime(payload.currentTime)
         if (payload.hostName) {
           setHostInfo(payload.hostId || '', payload.hostName)
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('cineroom:playback_heartbeat', {
+              detail: {
+                currentTime: payload.currentTime,
+                isPlaying: payload.isPlaying,
+                timestamp: payload.timestamp || Date.now(),
+                isHardSync: true,
+              },
+            })
+          )
+        }
+      })
+
+      // Broadcast Playback Heartbeat (Continuous sub-second lockstep sync)
+      channel.on('broadcast', { event: 'playback_heartbeat' }, ({ payload }) => {
+        if (!payload) return
+        if (!isHostRef.current && typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('cineroom:playback_heartbeat', {
+              detail: {
+                currentTime: payload.currentTime,
+                isPlaying: payload.isPlaying,
+                timestamp: payload.timestamp || Date.now(),
+                isHardSync: false,
+              },
+            })
+          )
+        }
+      })
+
+      // Sync Request from newly connected viewer
+      channel.on('broadcast', { event: 'request_sync' }, () => {
+        if (isHostRef.current && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('cineroom:respond_sync_request'))
         }
       })
 
@@ -677,14 +814,12 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-            sampleRate: 48000,
-            channelCount: 2,
           },
           video: cameraOn
             ? {
-                width: { ideal: 1280, min: 640 },
-                height: { ideal: 720, min: 480 },
-                frameRate: { ideal: 30, min: 24 },
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 30, max: 30 },
                 facingMode: 'user',
               }
             : false,
@@ -696,7 +831,14 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         if (cameraOn) {
           try {
             console.log('[WebRTC] Falling back to audio-only stream...')
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+              video: false,
+            })
             actualVideo = false
           } catch (audioErr: any) {
             console.error('[WebRTC] Microphone also unavailable:', audioErr.message)
@@ -719,24 +861,37 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       setHasAudio(micOn)
       setHasVideo(actualVideo)
 
-      // Attach or replace tracks on all active peer connections
-      peersRef.current.forEach((entry) => {
+      // Attach or replace tracks on all active peer connections and renegotiate
+      peersRef.current.forEach(async (entry, peerId) => {
         const pc = entry.pc
         stream!.getTracks().forEach((track) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
-          if (sender) {
-            sender.replaceTrack(track).catch(() => {})
+          const transceiver = pc
+            .getTransceivers()
+            .find((t) => t.receiver.track.kind === track.kind || t.sender.track?.kind === track.kind)
+
+          if (transceiver) {
+            transceiver.direction = 'sendrecv'
+            if (transceiver.sender) {
+              transceiver.sender.replaceTrack(track).catch(() => {})
+            }
           } else {
-            try {
-              pc.addTrack(track, stream!)
-            } catch {}
+            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
+            if (sender) {
+              sender.replaceTrack(track).catch(() => {})
+            } else {
+              try {
+                pc.addTrack(track, stream!)
+              } catch {}
+            }
           }
         })
+        optimizeSenders(pc)
+        await renegotiatePeer(entry, peerId)
       })
 
       return stream
     },
-    [setLocalStream, setHasAudio, setHasVideo]
+    [setLocalStream, setHasAudio, setHasVideo, optimizeSenders, renegotiatePeer]
   )
 
   /**
@@ -752,6 +907,20 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       })
       setHasAudio(next)
       hasAudioRef.current = next
+
+      // Ensure audio sender is active
+      peersRef.current.forEach(async (entry) => {
+        const aTrack = localStreamRef.current?.getAudioTracks()[0]
+        if (aTrack) {
+          const aTransceiver = entry.pc
+            .getTransceivers()
+            .find((t) => t.receiver.track.kind === 'audio' || t.sender.track?.kind === 'audio')
+          if (aTransceiver && aTransceiver.sender) {
+            aTransceiver.direction = 'sendrecv'
+            await aTransceiver.sender.replaceTrack(aTrack).catch(() => {})
+          }
+        }
+      })
     } else {
       // If no audio track exists, acquire it
       await startMedia(hasVideoRef.current, true)
@@ -773,7 +942,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   /**
    * Toggle Camera ("Go Live"):
    * Dynamically acquires or stops video track, replaces it in existing peer connections,
-   * and triggers renegotiation if needed.
+   * sets transceiver direction to sendrecv, and triggers renegotiation.
    */
   const toggleCamera = useCallback(async () => {
     const next = !hasVideoRef.current
@@ -782,9 +951,9 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       try {
         const vStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1280, min: 640 },
-            height: { ideal: 720, min: 480 },
-            frameRate: { ideal: 30, min: 24 },
+            width: { ideal: 1280, max: 1920 },
+            height: { ideal: 720, max: 1080 },
+            frameRate: { ideal: 30, max: 30 },
             facingMode: 'user',
           },
         })
@@ -804,25 +973,30 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
           }
 
-          // Attach to all peer connections (replaceTrack on transceiver/sender or addTrack)
-          peersRef.current.forEach((entry) => {
+          // Attach to all peer connections, set direction = sendrecv and renegotiate
+          peersRef.current.forEach(async (entry, peerId) => {
             const pc = entry.pc
             const videoTransceiver = pc
               .getTransceivers()
               .find((t) => t.receiver.track.kind === 'video' || t.sender.track?.kind === 'video')
 
-            if (videoTransceiver && videoTransceiver.sender) {
-              videoTransceiver.sender.replaceTrack(vTrack).catch(() => {})
+            if (videoTransceiver) {
+              videoTransceiver.direction = 'sendrecv'
+              if (videoTransceiver.sender) {
+                await videoTransceiver.sender.replaceTrack(vTrack).catch(() => {})
+              }
             } else {
               const videoSender = pc.getSenders().find((s) => s.track?.kind === 'video')
               if (videoSender) {
-                videoSender.replaceTrack(vTrack).catch(() => {})
+                await videoSender.replaceTrack(vTrack).catch(() => {})
               } else {
                 try {
                   pc.addTrack(vTrack, localStreamRef.current!)
                 } catch {}
               }
             }
+            optimizeSenders(pc)
+            await renegotiatePeer(entry, peerId)
           })
 
           setHasVideo(true)
@@ -841,12 +1015,21 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
       }
 
-      // Clear video sender on peers
-      peersRef.current.forEach((entry) => {
-        const videoSender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
-        if (videoSender) {
-          videoSender.replaceTrack(null).catch(() => {})
+      // Clear video sender on peers and renegotiate
+      peersRef.current.forEach(async (entry, peerId) => {
+        const videoTransceiver = entry.pc
+          .getTransceivers()
+          .find((t) => t.receiver.track.kind === 'video' || t.sender.track?.kind === 'video')
+
+        if (videoTransceiver && videoTransceiver.sender) {
+          await videoTransceiver.sender.replaceTrack(null).catch(() => {})
+        } else {
+          const videoSender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
+          if (videoSender) {
+            await videoSender.replaceTrack(null).catch(() => {})
+          }
         }
+        await renegotiatePeer(entry, peerId)
       })
 
       setHasVideo(false)
@@ -864,7 +1047,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         joinedAt: joinedAtRef.current,
       })
     }
-  }, [setHasVideo, setLocalStream])
+  }, [setHasVideo, setLocalStream, optimizeSenders, renegotiatePeer])
 
   // Restart WebRTC connections across all peers
   const restartWebRTC = useCallback(() => {
@@ -929,6 +1112,41 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     },
     [roomId, setIsPlaying, setPlaybackTime]
   )
+
+  /**
+   * Broadcast periodic heartbeat (every ~2s) while playing so all peers
+   * stay continuously locked to the exact same second without clock drift.
+   */
+  const sendPlaybackHeartbeat = useCallback((time: number, isPlaying: boolean) => {
+    if (channelRef.current && isHostRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'playback_heartbeat',
+        payload: {
+          currentTime: time,
+          isPlaying,
+          hostId: myIdRef.current,
+          hostName: myNameRef.current,
+          timestamp: Date.now(),
+        },
+      })
+    }
+  }, [])
+
+  /**
+   * Request host to immediately broadcast current playback time
+   */
+  const requestPlaybackSync = useCallback(() => {
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'request_sync',
+        payload: {
+          from: myIdRef.current,
+        },
+      })
+    }
+  }, [])
 
   const sendMovieChange = useCallback(
     async (movie: MovieInfo) => {
@@ -1034,6 +1252,8 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     <SupabaseRoomContext.Provider
       value={{
         sendPlaybackControl,
+        sendPlaybackHeartbeat,
+        requestPlaybackSync,
         sendMovieChange,
         sendChatMessage,
         sendReaction,
@@ -1055,6 +1275,8 @@ export function useSupabaseRoom() {
   if (!context) {
     return {
       sendPlaybackControl: async () => {},
+      sendPlaybackHeartbeat: () => {},
+      requestPlaybackSync: () => {},
       sendMovieChange: async () => {},
       sendChatMessage: async () => {},
       sendReaction: () => {},

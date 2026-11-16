@@ -52,11 +52,28 @@ function FacecamTile({
   const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
-    if (videoRef.current && cam.stream) {
-      videoRef.current.srcObject = cam.stream
-      videoRef.current.play().catch((err) => {
-        console.warn(`[FacecamTile ${cam.name}] video play waiting for gesture:`, err.message)
-      })
+    const video = videoRef.current
+    if (!video || !cam.stream) return
+
+    video.srcObject = cam.stream
+    const play = () => {
+      video.play().catch(() => {})
+    }
+    play()
+
+    cam.stream.onaddtrack = play
+    cam.stream.onremovetrack = play
+
+    const tracks = cam.stream.getVideoTracks()
+    tracks.forEach((t) => {
+      t.onunmute = play
+    })
+
+    return () => {
+      if (cam.stream) {
+        cam.stream.onaddtrack = null
+        cam.stream.onremovetrack = null
+      }
     }
   }, [cam.stream, cam.name])
 
@@ -71,12 +88,12 @@ function FacecamTile({
       }}
       className="relative overflow-hidden bg-black/75 border border-white/25 shadow-2xl transition-all duration-200 group flex-shrink-0"
     >
-      {/* Live Video Feed */}
+      {/* Live Video Feed - Always muted={true} so browser autoplay allows instant 30fps frames without blocking */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        muted={cam.isLocal}
+        muted={true}
         style={{
           transform: cam.isLocal && isMirrored ? 'scaleX(-1)' : 'none',
         }}
@@ -216,22 +233,33 @@ export default function FacecamOverlay({ showControls = false, isFullscreen = fa
         }
       : null
 
-  const remoteCams: CamFeed[] = presenceUsers
-    .filter((u) => {
-      if (u.id === myId) return false
-      const stream = streams[u.id]
-      const hasTrack = stream && stream.getVideoTracks().some((t) => t.readyState === 'live')
-      return u.hasVideo || hasTrack
+  const remoteIds = Array.from(
+    new Set([...presenceUsers.map((u) => u.id), ...Object.keys(streams)])
+  ).filter((id) => id !== myId)
+
+  const remoteCams: CamFeed[] = remoteIds
+    .map((id) => {
+      const presence = presenceUsers.find((u) => u.id === id)
+      const stream = streams[id]
+      const hasLiveVideoTrack =
+        stream && stream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled)
+      return {
+        id,
+        name: presence?.name || 'Viewer',
+        stream,
+        isLocal: false,
+        hasAudio:
+          presence?.hasAudio ??
+          (stream ? stream.getAudioTracks().some((t) => t.enabled) : false),
+        isHost: presence?.isHost,
+        hasLiveVideoTrack,
+      }
     })
-    .map((u) => ({
-      id: u.id,
-      name: u.name || 'Viewer',
-      stream: streams[u.id],
-      isLocal: false,
-      hasAudio: u.hasAudio,
-      isHost: u.isHost,
-    }))
-    .filter((c) => c.stream !== undefined)
+    .filter(
+      (c) =>
+        c.stream !== undefined &&
+        (c.hasLiveVideoTrack || presenceUsers.find((u) => u.id === c.id)?.hasVideo)
+    )
 
   const activeCams: CamFeed[] = localCam ? [localCam, ...remoteCams] : remoteCams
 
