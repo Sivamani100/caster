@@ -257,7 +257,7 @@ export default function HomePage() {
                 onChange={(e) => setHostName(e.target.value)}
                 placeholder="Your name (e.g. Alex)"
                 maxLength={24}
-                className="w-full liquid-glass-input rounded-xl px-3 py-2 text-xs outline-none transition-all placeholder:text-zinc-600"
+                className="w-full liquid-glass-input rounded-xl px-3.5 py-2.5 text-base sm:text-xs outline-none transition-all placeholder:text-zinc-600 touch-manipulation"
               />
             </div>
 
@@ -285,14 +285,14 @@ export default function HomePage() {
                     value={customTitle}
                     onChange={(e) => setCustomTitle(e.target.value)}
                     placeholder="Stream Title"
-                    className="w-full liquid-glass-input rounded-lg px-3 py-1.5 text-xs outline-none"
+                    className="w-full liquid-glass-input rounded-lg px-3 py-2 text-base sm:text-xs outline-none touch-manipulation"
                   />
                   <input
                     type="text"
                     value={customUrl}
                     onChange={(e) => setCustomUrl(e.target.value)}
                     placeholder="Paste .m3u8 (HLS) or .mp4 link"
-                    className="w-full liquid-glass-input rounded-lg px-3 py-1.5 text-xs outline-none"
+                    className="w-full liquid-glass-input rounded-lg px-3 py-2 text-base sm:text-xs outline-none touch-manipulation"
                     required
                   />
                 </div>
@@ -320,7 +320,7 @@ export default function HomePage() {
             {/* Launch CTA */}
             <button
               type="submit"
-              className="w-full py-2.5 btn-action font-medium text-xs rounded-xl flex items-center justify-center gap-2 mt-1"
+              className="w-full h-11 sm:h-10 btn-action font-medium text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 mt-1 touch-manipulation"
             >
               <span>Start Cloud Screening</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -380,14 +380,14 @@ export default function HomePage() {
                 onChange={(e) => setJoinName(e.target.value)}
                 placeholder="e.g. Sam"
                 maxLength={24}
-                className="w-full liquid-glass-input rounded-xl px-3 py-2 text-xs outline-none transition-all placeholder:text-zinc-600"
+                className="w-full liquid-glass-input rounded-xl px-3.5 py-2.5 text-base sm:text-xs outline-none transition-all placeholder:text-zinc-600 touch-manipulation"
               />
             </div>
 
             {/* Join CTA */}
             <button
               type="submit"
-              className="w-full py-2.5 btn-action font-medium text-xs rounded-xl flex items-center justify-center gap-2 mt-1"
+              className="w-full h-11 sm:h-10 btn-action font-medium text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 mt-1 touch-manipulation"
             >
               <span>Join Screening</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -397,7 +397,7 @@ export default function HomePage() {
       </main>
 
       {/* Minimal Footer */}
-      <footer className="py-4 px-6 border-t border-white/[0.06] text-center text-[11px] text-zinc-500 z-10">
+      <footer className="py-4 px-6 border-t border-white/[0.06] text-center text-[11px] text-zinc-500 z-10 pb-safe">
         <p>Casterr • High-Performance Realtime Streaming</p>
       </footer>
     </div>

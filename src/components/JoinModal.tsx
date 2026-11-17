@@ -156,7 +156,7 @@ export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
             onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
             placeholder="e.g. Alex"
             maxLength={24}
-            className="w-full liquid-glass-input rounded-xl px-3 py-2 text-xs outline-none transition-all placeholder:text-zinc-600"
+            className="w-full liquid-glass-input rounded-xl px-3.5 py-2.5 text-base sm:text-xs outline-none transition-all placeholder:text-zinc-600 touch-manipulation"
             autoFocus
           />
         </div>
@@ -164,7 +164,7 @@ export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
         {/* Join button */}
         <button
           onClick={handleJoin}
-          className="w-full py-2.5 btn-action font-medium text-xs rounded-xl flex items-center justify-center gap-2 mt-1"
+          className="w-full h-11 sm:h-10 btn-action font-medium text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 mt-1 touch-manipulation"
         >
           <span>Enter Screening</span>
           <ArrowRight className="w-3.5 h-3.5" />

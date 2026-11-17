@@ -43,9 +43,9 @@ export default function ViewerTiles({ roomId, variant = 'filmstrip' }: ViewerTil
   const totalWatchers = Math.max(1, presenceUsers.length || 1)
 
   return (
-    <div className="liquid-glass rounded-2xl p-2.5 sm:p-3 border border-white/[0.08] flex flex-col gap-2">
+    <div className="liquid-glass rounded-xl sm:rounded-2xl p-2 sm:p-3 border border-white/[0.08] flex flex-col gap-1.5 sm:gap-2">
       <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <Users className="w-3.5 h-3.5 text-zinc-400" />
           <span className="text-white font-medium text-xs tracking-tight">
             Screening Group ({totalWatchers})
@@ -64,13 +64,13 @@ export default function ViewerTiles({ roomId, variant = 'filmstrip' }: ViewerTil
             }`}
           >
             {hasAudio ? <Mic className="w-3 h-3 text-white" /> : <MicOff className="w-3 h-3 text-zinc-500" />}
-            <span>{hasAudio ? 'Mute' : 'Muted'}</span>
+            <span className="hidden sm:inline">{hasAudio ? 'Mute' : 'Muted'}</span>
           </button>
 
           <button
             onClick={handleCameraClick}
             disabled={cameraLoading}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-[11px] font-medium transition-all ${
               hasVideo
                 ? 'bg-white/20 text-white border border-white/20'
                 : 'btn-action'
@@ -83,15 +83,15 @@ export default function ViewerTiles({ roomId, variant = 'filmstrip' }: ViewerTil
             ) : (
               <Camera className="w-3 h-3" />
             )}
-            <span>{hasVideo ? 'Stop Cam' : 'Go Live'}</span>
+            <span>{hasVideo ? 'Stop' : 'Go Live'}</span>
           </button>
         </div>
       </div>
 
-      {/* Compact Filmstrip row */}
-      <div className="flex gap-2 overflow-x-auto pb-0.5 pt-0.5 scrollbar-thin">
+      {/* Compact Filmstrip row with momentum scrolling on mobile */}
+      <div className="flex gap-2 overflow-x-auto pb-0.5 pt-0.5 scrollbar-thin touch-pan-x overscroll-contain">
         {allTiles.map(({ user, stream, isLocal }) => (
-          <div key={user.id} className="w-28 sm:w-32 h-18 sm:h-20 flex-shrink-0">
+          <div key={user.id} className="w-24 sm:w-32 h-16 sm:h-20 flex-shrink-0">
             <ViewerVideo
               user={user}
               stream={stream}

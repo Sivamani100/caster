@@ -618,20 +618,20 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
           }`}
         >
           {/* Left: Stream Title & Host Capsule (LIVE badge & Code Pill Removed per request) */}
-          <div className="flex items-center gap-2 sm:gap-2.5 pointer-events-auto">
-            <div className="glass-capsule px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs shadow-xl">
-              <span className="font-semibold text-white tracking-tight truncate max-w-[180px] sm:max-w-sm">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 pointer-events-auto min-w-0">
+            <div className="glass-capsule px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-full flex items-center gap-1.5 sm:gap-2 text-xs shadow-xl min-w-0">
+              <span className="font-semibold text-white tracking-tight truncate max-w-[100px] sm:max-w-sm">
                 {currentMovie.title}
               </span>
-              <span className="text-zinc-500">•</span>
-              <span className="text-zinc-300 text-[11px] font-medium">
+              <span className="text-zinc-500 hidden sm:inline">•</span>
+              <span className="text-zinc-300 text-[11px] font-medium hidden sm:inline">
                 {isHost ? 'You are Host' : `Host: ${hostName}`}
               </span>
             </div>
           </div>
 
           {/* Right: WebRTC Mesh Badge, Switch Stream, Share & Exit Buttons */}
-          <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+          <div className="flex items-center gap-1 sm:gap-2 pointer-events-auto flex-shrink-0">
             {/* Live WebRTC Audio/Video Connection Diagnostics Badge */}
             <WebRTCStatusBadge />
 
@@ -645,22 +645,23 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                 }
                 setShowMoviePicker(!showMoviePicker)
               }}
-              className={`glass-capsule px-3 py-1.5 rounded-full text-xs font-medium transition-all shadow-xl ${
+              className={`glass-capsule p-1.5 sm:px-3 sm:py-1.5 rounded-full text-xs font-medium transition-all shadow-xl ${
                 isHost
                   ? 'text-white hover:bg-white/[0.1]'
                   : 'text-zinc-500 cursor-not-allowed'
               }`}
+              title={isHost ? 'Switch Stream' : 'Controlled by Host'}
             >
               <div className="flex items-center gap-1.5">
-                <SlidersHorizontal className="w-3 h-3 text-zinc-400" />
-                <span>{isHost ? 'Switch Stream' : 'Host Controlled'}</span>
+                <SlidersHorizontal className="w-3.5 h-3.5 text-zinc-300" />
+                <span className="hidden sm:inline">{isHost ? 'Switch Stream' : 'Host Controlled'}</span>
               </div>
             </button>
 
             {/* Share Link */}
             <button
               onClick={copyRoomLink}
-              className="glass-capsule p-2 rounded-full text-zinc-300 hover:text-white transition-all shadow-xl"
+              className="glass-capsule p-1.5 sm:p-2 rounded-full text-zinc-300 hover:text-white transition-all shadow-xl"
               title="Copy room link"
             >
               {copiedLink ? <Check className="w-3.5 h-3.5 text-[#0071e3]" /> : <Share2 className="w-3.5 h-3.5" />}
@@ -669,7 +670,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
             {/* Leave Room */}
             <Link
               href="/"
-              className="glass-capsule p-2 rounded-full text-zinc-400 hover:text-white transition-all shadow-xl"
+              className="glass-capsule p-1.5 sm:p-2 rounded-full text-zinc-400 hover:text-white transition-all shadow-xl"
               title="Leave Room"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -775,35 +776,35 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
             </div>
 
             {/* YouTube Style Action Buttons Row */}
-            <div className="flex items-center justify-between gap-2 sm:gap-4">
-              {/* Left: Play/Pause, 10s Rewind, 10s Forward, Volume, Duration */}
-              <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex items-center justify-between gap-1.5 sm:gap-4">
+              {/* Left: Play/Pause, Volume, Duration */}
+              <div className="flex items-center gap-1 sm:gap-2 min-w-0">
                 {/* Play / Pause Toggle */}
                 <button
                   onClick={togglePlay}
-                  className={`p-1.5 rounded-lg transition-all ${
+                  className={`p-1.5 rounded-lg transition-all flex-shrink-0 ${
                     isHost ? 'text-white hover:text-white/80 active:scale-95' : 'text-zinc-500 cursor-not-allowed'
                   }`}
                   title={isHost ? (isPlaying ? 'Pause (Space)' : 'Play (Space)') : `Host controlled (${hostName})`}
                 >
                   {isPlaying ? (
-                    <Pause className="w-5 h-5" fill="currentColor" />
+                    <Pause className="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" />
                   ) : (
-                    <Play className="w-5 h-5" fill="currentColor" />
+                    <Play className="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" />
                   )}
                 </button>
 
                 {/* Volume Mute & Slider */}
-                <div className="flex items-center gap-1 ml-1 sm:ml-2">
+                <div className="flex items-center gap-1">
                   <button
                     onClick={toggleMute}
-                    className="text-zinc-300 hover:text-white p-1 rounded-lg transition-colors"
+                    className="text-zinc-300 hover:text-white p-1 rounded-lg transition-colors flex-shrink-0"
                     title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
                   >
                     {isMuted || volume === 0 ? (
-                      <VolumeX className="w-4 h-4 text-zinc-500" />
+                      <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-zinc-400" />
                     ) : (
-                      <Volume2 className="w-4 h-4" />
+                      <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     )}
                   </button>
                   <input
@@ -813,22 +814,22 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                     step="0.05"
                     value={isMuted ? 0 : volume}
                     onChange={handleVolume}
-                    className="w-14 sm:w-20 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white"
+                    className="hidden sm:block w-14 sm:w-20 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white"
                   />
                 </div>
 
                 {/* Movie Length / Duration */}
-                <span className="text-xs text-zinc-300 font-mono tracking-tight ml-2">
+                <span className="text-[10px] sm:text-xs text-zinc-300 font-mono tracking-tight ml-1 sm:ml-2 truncate">
                   {formatSeconds(currentTime)} / {formatSeconds(duration)}
                 </span>
               </div>
 
               {/* Right: AV Toggles (Mic Mute & Go Live), Chat, Fullscreen */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                 {/* Mic Mute / Unmute Toggle */}
                 <button
                   onClick={toggleMic}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
+                  className={`p-1.5 sm:px-3 sm:py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     hasAudio
                       ? 'glass-capsule text-white border border-emerald-500/30 hover:bg-emerald-500/10'
                       : 'bg-rose-500/20 border border-rose-500/50 text-rose-300 hover:bg-rose-500/30'
@@ -839,13 +840,13 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       <Mic className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Mic On</span>
+                      <span className="hidden sm:inline">Mic On</span>
                     </>
                   ) : (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
                       <MicOff className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Muted</span>
+                      <span className="hidden sm:inline">Muted</span>
                     </>
                   )}
                 </button>
@@ -854,7 +855,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                 <button
                   onClick={handleCameraToggle}
                   disabled={cameraLoading}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
+                  className={`p-1.5 sm:px-3.5 sm:py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     hasVideo
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
                       : 'btn-action text-white hover:brightness-110'
@@ -867,12 +868,12 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       <CameraOff className="w-3.5 h-3.5 text-emerald-300" />
-                      <span>Live Cam</span>
+                      <span className="hidden sm:inline">Live Cam</span>
                     </>
                   ) : (
                     <>
                       <Camera className="w-3.5 h-3.5 text-white" />
-                      <span>Go Live</span>
+                      <span className="hidden sm:inline">Go Live</span>
                     </>
                   )}
                 </button>
@@ -880,7 +881,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                 {/* Chat Toggle Button */}
                 <button
                   onClick={() => setShowFullscreenChat(!showFullscreenChat)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
+                  className={`p-1.5 sm:px-3 sm:py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 shadow-md active:scale-95 ${
                     showFullscreenChat
                       ? 'bg-[#0071e3] text-white'
                       : 'glass-capsule text-zinc-300 hover:text-white'
@@ -888,16 +889,16 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
                   title="Toggle Chat"
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
-                  <span>Chat</span>
+                  <span className="hidden sm:inline">Chat</span>
                 </button>
 
                 {/* Fullscreen Button */}
                 <button
                   onClick={toggleFullscreen}
-                  className="text-zinc-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+                  className="text-zinc-300 hover:text-white p-1 sm:p-1.5 rounded-lg hover:bg-white/10 transition-colors"
                   title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
                 >
-                  {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Maximize2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
                 </button>
               </div>
             </div>

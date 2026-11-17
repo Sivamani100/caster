@@ -154,12 +154,12 @@ export default function ChatPanel({ roomId, onClose, isFullscreen = false }: Cha
       </div>
 
       {/* Subtle Reactions Bar */}
-      <div className="flex items-center justify-center gap-2 sm:gap-3 px-2 py-1.5 border-t border-white/[0.06] bg-black/40 flex-shrink-0">
+      <div className="flex items-center justify-center gap-2 sm:gap-3 px-2 py-1 border-t border-white/[0.06] bg-black/40 flex-shrink-0">
         {REACTIONS.map((emoji) => (
           <button
             key={emoji}
             onClick={() => handleReactionClick(emoji)}
-            className="text-base sm:text-lg hover:scale-130 active:scale-90 transition-transform p-1 rounded-xl hover:bg-white/[0.08]"
+            className="text-lg sm:text-lg hover:scale-125 active:scale-95 transition-transform p-1.5 rounded-xl hover:bg-white/[0.08] touch-manipulation min-w-[36px] min-h-[36px] flex items-center justify-center select-none"
             title={`React ${emoji}`}
           >
             {emoji}
@@ -168,20 +168,20 @@ export default function ChatPanel({ roomId, onClose, isFullscreen = false }: Cha
       </div>
 
       {/* Responsive, Sleek Input Field */}
-      <form onSubmit={handleSend} className="p-2 sm:p-3 border-t border-white/[0.08] bg-black/60 backdrop-blur-xl flex items-center gap-2 flex-shrink-0">
+      <form onSubmit={handleSend} className="p-2 sm:p-2.5 border-t border-white/[0.08] bg-black/60 backdrop-blur-xl flex items-center gap-2 flex-shrink-0 pb-safe">
         <input
           ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Message room..."
-          className="flex-1 h-10 sm:h-11 px-3.5 sm:px-4 text-xs sm:text-[13.5px] rounded-xl liquid-glass-input text-white placeholder:text-zinc-500 outline-none font-normal tracking-wide shadow-inner"
+          className="flex-1 h-10 sm:h-11 px-3.5 sm:px-4 text-base sm:text-[13.5px] rounded-xl liquid-glass-input text-white placeholder:text-zinc-500 outline-none font-normal tracking-wide shadow-inner touch-manipulation"
           maxLength={400}
         />
         <button
           type="submit"
           disabled={!input.trim()}
-          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl btn-action flex items-center justify-center disabled:opacity-30 transition-all flex-shrink-0 shadow-lg hover:scale-105 active:scale-95"
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl btn-action flex items-center justify-center disabled:opacity-30 transition-all flex-shrink-0 shadow-lg active:scale-95 touch-manipulation"
           title="Send message"
         >
           <Send className="w-4 h-4 text-white" />

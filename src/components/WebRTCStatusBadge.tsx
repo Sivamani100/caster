@@ -80,8 +80,11 @@ export default function WebRTCStatusBadge() {
               roomConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
             }`}
           />
-          <span className="text-white">
+          <span className="text-white hidden sm:inline">
             {roomConnected ? `Room (${activePeersCount + 1})` : 'Connecting...'}
+          </span>
+          <span className="text-white sm:hidden text-[10px] font-mono">
+            {activePeersCount + 1}
           </span>
         </div>
 
@@ -91,7 +94,7 @@ export default function WebRTCStatusBadge() {
         <span
           className={`px-1.5 py-0.5 rounded-md font-mono text-[10px] font-semibold border ${getDriftColor()}`}
         >
-          {isHost ? 'Host (0ms)' : `±${absDrift}ms`}
+          {isHost ? 'Host' : `±${absDrift}ms`}
         </span>
 
         <span className="text-zinc-600 hidden sm:inline">|</span>
@@ -102,13 +105,13 @@ export default function WebRTCStatusBadge() {
         </span>
 
         <ChevronDown
-          className={`w-3 h-3 text-zinc-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-3 h-3 text-zinc-400 transition-transform hidden sm:inline ${isOpen ? 'rotate-180' : ''}`}
         />
       </button>
 
       {/* Telemetry Diagnostics Dropdown Card */}
       {isOpen && (
-        <div className="absolute top-9 right-0 w-80 liquid-glass rounded-2xl p-4 shadow-2xl border border-white/20 backdrop-blur-3xl animate-fade-in text-white text-xs z-50 space-y-3">
+        <div className="absolute top-9 right-0 w-72 sm:w-80 liquid-glass rounded-2xl p-4 shadow-2xl border border-white/20 backdrop-blur-3xl animate-fade-in text-white text-xs z-50 space-y-3">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
             <div className="flex items-center gap-1.5">
