@@ -22,14 +22,23 @@ function RoomContent({ roomId }: { roomId: string }) {
 
   const { startMedia } = useSupabaseRoom()
 
-  // Initialize from sessionStorage if user came from Create/Join flow
+  // Initialize from sessionStorage or query param if user came from Create/Join flow or ?host=true
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search)
+      const isHostQuery = urlParams.get('host') === 'true'
       const storedName = sessionStorage.getItem(`cineroom_${roomId}_name`)
-      const isHostStored = sessionStorage.getItem(`cineroom_${roomId}_isHost`) === 'true'
+      const isHostStored = isHostQuery || sessionStorage.getItem(`cineroom_${roomId}_isHost`) === 'true'
+
+      if (isHostQuery) {
+        sessionStorage.setItem(`cineroom_${roomId}_isHost`, 'true')
+      }
 
       if (storedName) {
         setMyName(storedName)
+      } else if (isHostQuery) {
+        setMyName('Host')
+        sessionStorage.setItem(`cineroom_${roomId}_name`, 'Host')
       }
       setIsHost(isHostStored)
 
