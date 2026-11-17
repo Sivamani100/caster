@@ -15,8 +15,8 @@ const mono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'CineRoom – Watch Together in Realtime',
-  description: 'Synchronized live cloud cinema with host authority, Zoom-style webcam cards, and instant chat',
+  title: 'Casterr – Realtime Watch Party',
+  description: 'Synchronized live video streaming with host controls, real-time webcam feeds, and instant chat.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

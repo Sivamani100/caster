@@ -25,7 +25,7 @@ html, body {
   letter-spacing: -0.011em;
 }
 
-/* Antigravity 2.0 iOS / visionOS Liquid Glassmorphism tokens (Clean, simple, luminous frosted glass) */
+/* Modern frosted glass design system tokens (Clean, minimalist, luminous frosted glass) */
 .liquid-glass {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(32px) saturate(190%);

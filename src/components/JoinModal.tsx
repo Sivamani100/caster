@@ -16,7 +16,11 @@ const CINEMA_NAMES = [
 export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
   const [name, setName] = useState(() => {
     if (typeof window !== 'undefined') {
-      return sessionStorage.getItem(`cineroom_${roomId}_name`) || ''
+      return (
+        sessionStorage.getItem(`cineroom_${roomId}_name`) ||
+        localStorage.getItem('cineroom_user_name') ||
+        ''
+      )
     }
     return ''
   })
@@ -62,6 +66,11 @@ export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
 
   const handleJoin = () => {
     const finalName = name.trim() || `Viewer${Math.floor(Math.random() * 8999 + 1000)}`
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cineroom_user_name', finalName)
+      sessionStorage.setItem(`cineroom_${roomId}_name`, finalName)
+      sessionStorage.setItem(`cineroom_${roomId}_joined`, 'true')
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop())
     }
@@ -86,7 +95,7 @@ export default function JoinModal({ onJoin, roomId }: JoinModalProps) {
           </p>
         </div>
 
-        {/* Camera / Avatar Preview (iOS Style) */}
+        {/* Camera / Avatar Preview */}
         <div className="relative rounded-xl overflow-hidden bg-white/[0.02] border border-white/[0.08] aspect-video flex items-center justify-center group shadow-inner">
           {cameraOn ? (
             <video

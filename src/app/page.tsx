@@ -37,6 +37,13 @@ export default function HomePage() {
 
   useEffect(() => {
     setGeneratedCode(Math.floor(1000 + Math.random() * 9000).toString())
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cineroom_user_name') || ''
+      if (saved) {
+        setHostName(saved)
+        setJoinName(saved)
+      }
+    }
   }, [])
 
   const regenerateCode = () => {
@@ -45,7 +52,7 @@ export default function HomePage() {
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault()
-    const name = hostName.trim() || 'Host'
+    const name = hostName.trim() || localStorage.getItem('cineroom_user_name') || 'Host'
     const movieToStream = isCustomStream
       ? {
           title: customTitle.trim() || 'Custom Stream',
@@ -56,8 +63,10 @@ export default function HomePage() {
       : selectedMovie
 
     if (typeof window !== 'undefined') {
+      localStorage.setItem('cineroom_user_name', name)
       sessionStorage.setItem(`cineroom_${generatedCode}_name`, name)
       sessionStorage.setItem(`cineroom_${generatedCode}_isHost`, 'true')
+      sessionStorage.setItem(`cineroom_${generatedCode}_joined`, 'true')
       sessionStorage.setItem(`cineroom_${generatedCode}_movie`, JSON.stringify(movieToStream))
     }
 
@@ -88,13 +97,29 @@ export default function HomePage() {
       return
     }
 
-    const name = joinName.trim() || `Viewer${Math.floor(Math.random() * 8999 + 1000)}`
+    const name = joinName.trim() || localStorage.getItem('cineroom_user_name') || `Viewer${Math.floor(Math.random() * 8999 + 1000)}`
     if (typeof window !== 'undefined') {
+      localStorage.setItem('cineroom_user_name', name)
       sessionStorage.setItem(`cineroom_${code}_name`, name)
       sessionStorage.setItem(`cineroom_${code}_isHost`, 'false')
+      sessionStorage.setItem(`cineroom_${code}_joined`, 'true')
     }
 
     router.push(`/room/${code}`)
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault()
+    const pasted = e.clipboardData.getData('text').trim().replace(/[^0-9]/g, '').slice(0, 4)
+    if (pasted.length > 0) {
+      if (pasted[0]) setDigit1(pasted[0])
+      if (pasted[1]) setDigit2(pasted[1])
+      if (pasted[2]) setDigit3(pasted[2])
+      if (pasted[3]) setDigit4(pasted[3])
+      setJoinError('')
+      const focusTarget = Math.min(4, pasted.length + 1)
+      document.getElementById(`digit-${focusTarget}`)?.focus()
+    }
   }
 
   const handleDigitChange = (index: number, val: string) => {
@@ -128,28 +153,28 @@ export default function HomePage() {
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[600px] h-[240px] bg-gradient-to-b from-white/[0.04] to-transparent blur-3xl pointer-events-none" />
 
       {/* Top Navbar */}
-      <header className="h-14 px-4 sm:px-8 flex items-center justify-between z-20 border-b border-white/[0.07] liquid-glass-subtle">
+      <header className="h-14 px-4 sm:px-8 flex items-center justify-between z-20 border-b border-white/[0.07] bg-white/[0.02] backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-white text-black font-black flex items-center justify-center text-xs shadow-sm">
+          <div className="w-7 h-7 rounded-lg bg-[#0071e3] text-white font-bold flex items-center justify-center text-xs shadow-md">
             C
           </div>
           <span className="text-sm font-semibold tracking-tight text-white">
-            CineRoom <span className="text-[10px] font-mono text-zinc-500 font-normal">Cloud 2.0</span>
+            Casterr
           </span>
         </div>
 
         <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-[11px] text-zinc-400">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#0071e3] animate-pulse" />
-          <span>Supabase Realtime Cloud</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span>Realtime Network Active</span>
         </div>
       </header>
 
       {/* Main Content Card */}
       <main className="flex-1 flex flex-col items-center justify-center px-4 py-8 sm:py-12 z-10 text-center max-w-xl mx-auto w-full">
-        {/* Antigravity 2.0 Status Pill */}
+        {/* Realtime Status Pill */}
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-[11px] text-zinc-300 mb-5">
           <ShieldCheck className="w-3 h-3 text-[#0071e3]" />
-          <span>Enterprise Realtime Sync • Antigravity 2.0 Style</span>
+          <span>Enterprise Realtime Sync • Sub-Frame Accuracy</span>
         </div>
 
         {/* Heading */}
@@ -157,10 +182,10 @@ export default function HomePage() {
           Watch movies together, <span className="text-zinc-400 font-normal">in perfect sync.</span>
         </h1>
         <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mx-auto mb-6 leading-relaxed">
-          Cloud synchronized broadcast with 4-digit room passcodes, host authority, and Zoom-style viewer video cards.
+          Ultra-low-latency synchronized video streaming with host controls, live webcam feeds, and instant chat.
         </p>
 
-        {/* iOS Segmented Pill Toggle */}
+        {/* Tab Toggle */}
         <div className="w-full max-w-xs p-1 rounded-xl liquid-glass-subtle border border-white/[0.08] flex gap-1 mb-6">
           <button
             type="button"
@@ -303,7 +328,7 @@ export default function HomePage() {
           </form>
         )}
 
-        {/* JOIN ROOM CARD (Apple Passcode Style) */}
+        {/* Join Room Card */}
         {activeTab === 'join' && (
           <form
             onSubmit={handleJoinRoom}
@@ -331,6 +356,7 @@ export default function HomePage() {
                     value={val}
                     onChange={(e) => handleDigitChange(set, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(set, e)}
+                    onPaste={handlePaste}
                     className="w-12 h-14 sm:w-14 sm:h-16 bg-white/[0.04] border border-white/[0.12] focus:border-[#0071e3] rounded-xl text-center text-xl sm:text-2xl font-mono font-semibold text-white outline-none transition-all shadow-inner"
                     autoFocus={set === 1}
                   />
@@ -372,7 +398,7 @@ export default function HomePage() {
 
       {/* Minimal Footer */}
       <footer className="py-4 px-6 border-t border-white/[0.06] text-center text-[11px] text-zinc-500 z-10">
-        <p>CineRoom Cloud 2.0 • Antigravity Liquid Glass Interface</p>
+        <p>Casterr • High-Performance Realtime Streaming</p>
       </footer>
     </div>
   )

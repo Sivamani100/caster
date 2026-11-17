@@ -78,7 +78,7 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
           className="w-full h-full object-cover"
         />
       ) : (
-        /* Minimalist Liquid Glass Avatar */
+        /* Minimalist Avatar */
         <div className="w-full h-full flex flex-col items-center justify-center p-2 relative bg-gradient-to-b from-white/[0.04] to-transparent">
           <div className="w-8 h-8 rounded-full bg-white/[0.08] border border-white/[0.1] text-white flex items-center justify-center text-xs font-semibold shadow-inner">
             {user.name ? user.name.charAt(0).toUpperCase() : 'U'}

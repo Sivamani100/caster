@@ -53,7 +53,7 @@ export default function ViewerTiles({ roomId, variant = 'filmstrip' }: ViewerTil
           <span className="w-1.5 h-1.5 rounded-full bg-[#0071e3] animate-pulse" />
         </div>
 
-        {/* Quick AV Toggles (iOS Liquid Glass style) */}
+        {/* Quick AV Toggles */}
         <div className="flex items-center gap-1.5">
           <button
             onClick={toggleMic}
