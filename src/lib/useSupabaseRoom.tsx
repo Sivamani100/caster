@@ -301,16 +301,15 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     pc.addTransceiver('audio', { direction: 'sendrecv' })
     pc.addTransceiver('video', { direction: 'sendrecv' })
 
-    // Attach local media tracks if active
+    // Attach local media tracks if active to the pre-created transceivers
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
-        const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
-        if (sender) {
-          sender.replaceTrack(track).catch(() => {})
-        } else {
-          try {
-            pc.addTrack(track, localStreamRef.current!)
-          } catch {}
+        const transceiver = pc
+          .getTransceivers()
+          .find((t) => t.receiver.track.kind === track.kind)
+        if (transceiver && transceiver.sender) {
+          transceiver.direction = 'sendrecv'
+          transceiver.sender.replaceTrack(track).catch(() => {})
         }
       })
       optimizeSenders(pc)
@@ -867,22 +866,11 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         stream!.getTracks().forEach((track) => {
           const transceiver = pc
             .getTransceivers()
-            .find((t) => t.receiver.track.kind === track.kind || t.sender.track?.kind === track.kind)
+            .find((t) => t.receiver.track.kind === track.kind)
 
-          if (transceiver) {
+          if (transceiver && transceiver.sender) {
             transceiver.direction = 'sendrecv'
-            if (transceiver.sender) {
-              transceiver.sender.replaceTrack(track).catch(() => {})
-            }
-          } else {
-            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind)
-            if (sender) {
-              sender.replaceTrack(track).catch(() => {})
-            } else {
-              try {
-                pc.addTrack(track, stream!)
-              } catch {}
-            }
+            transceiver.sender.replaceTrack(track).catch(() => {})
           }
         })
         optimizeSenders(pc)
@@ -978,22 +966,11 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             const pc = entry.pc
             const videoTransceiver = pc
               .getTransceivers()
-              .find((t) => t.receiver.track.kind === 'video' || t.sender.track?.kind === 'video')
+              .find((t) => t.receiver.track.kind === 'video')
 
-            if (videoTransceiver) {
+            if (videoTransceiver && videoTransceiver.sender) {
               videoTransceiver.direction = 'sendrecv'
-              if (videoTransceiver.sender) {
-                await videoTransceiver.sender.replaceTrack(vTrack).catch(() => {})
-              }
-            } else {
-              const videoSender = pc.getSenders().find((s) => s.track?.kind === 'video')
-              if (videoSender) {
-                await videoSender.replaceTrack(vTrack).catch(() => {})
-              } else {
-                try {
-                  pc.addTrack(vTrack, localStreamRef.current!)
-                } catch {}
-              }
+              await videoTransceiver.sender.replaceTrack(vTrack).catch(() => {})
             }
             optimizeSenders(pc)
             await renegotiatePeer(entry, peerId)
@@ -1019,15 +996,10 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       peersRef.current.forEach(async (entry, peerId) => {
         const videoTransceiver = entry.pc
           .getTransceivers()
-          .find((t) => t.receiver.track.kind === 'video' || t.sender.track?.kind === 'video')
+          .find((t) => t.receiver.track.kind === 'video')
 
         if (videoTransceiver && videoTransceiver.sender) {
           await videoTransceiver.sender.replaceTrack(null).catch(() => {})
-        } else {
-          const videoSender = entry.pc.getSenders().find((s) => s.track?.kind === 'video')
-          if (videoSender) {
-            await videoSender.replaceTrack(null).catch(() => {})
-          }
         }
         await renegotiatePeer(entry, peerId)
       })
