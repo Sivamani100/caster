@@ -110,6 +110,18 @@ interface CineRoomStore {
   setWebRTCStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'failed') => void
   activePeersCount: number
   setActivePeersCount: (count: number) => void
+
+  // Telemetry & NTP Sync Metrics
+  syncDriftMs: number
+  setSyncDriftMs: (ms: number) => void
+  ntpOffsetMs: number
+  setNtpOffsetMs: (offset: number) => void
+  ntpRttMs: number
+  setNtpRttMs: (rtt: number) => void
+  iceCandidateType: string
+  setIceCandidateType: (type: string) => void
+  roomConnected: boolean
+  setRoomConnected: (connected: boolean) => void
 }
 
 export const useCineRoomStore = create<CineRoomStore>((set) => ({
@@ -172,4 +184,15 @@ export const useCineRoomStore = create<CineRoomStore>((set) => ({
   setWebRTCStatus: (webrtcStatus) => set({ webrtcStatus }),
   activePeersCount: 0,
   setActivePeersCount: (activePeersCount) => set({ activePeersCount }),
+
+  syncDriftMs: 0,
+  setSyncDriftMs: (syncDriftMs) => set({ syncDriftMs }),
+  ntpOffsetMs: 0,
+  setNtpOffsetMs: (ntpOffsetMs) => set({ ntpOffsetMs }),
+  ntpRttMs: 0,
+  setNtpRttMs: (ntpRttMs) => set({ ntpRttMs }),
+  iceCandidateType: 'stun/host',
+  setIceCandidateType: (iceCandidateType) => set({ iceCandidateType }),
+  roomConnected: false,
+  setRoomConnected: (roomConnected) => set({ roomConnected }),
 }))

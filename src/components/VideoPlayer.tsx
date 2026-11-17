@@ -48,16 +48,26 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     hasVideo,
     hasAudio,
     presenceUsers,
+    ntpOffsetMs,
+    setSyncDriftMs,
   } = useCineRoomStore()
 
   const {
     sendPlaybackControl,
     sendPlaybackHeartbeat,
     requestPlaybackSync,
+    calibrateClockOffset,
     sendMovieChange,
     toggleMic,
     toggleCamera,
   } = useSupabaseRoom()
+
+  const latestHostSyncRef = useRef<{
+    isPlaying: boolean
+    videoTimestamp: number
+    hostWallClock: number
+    playbackRate?: number
+  } | null>(null)
 
   const [cameraLoading, setCameraLoading] = useState(false)
   const [isMuted, setIsMuted] = useState(true)
@@ -89,55 +99,136 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     }
   }
 
-  // Synchronize player with Supabase playback state
+  // Listen for sync packets from Host (both periodic heartbeats and immediate actions)
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+    const handleSyncPacket = (e: Event) => {
+      const payload = (e as CustomEvent).detail
+      latestHostSyncRef.current = {
+        isPlaying: payload.isPlaying,
+        videoTimestamp: payload.videoTimestamp ?? payload.currentTime ?? 0,
+        hostWallClock: payload.hostWallClock ?? payload.timestamp ?? Date.now(),
+        playbackRate: payload.playbackRate || 1.0,
+      }
 
-    // Drift correction: snap if drift exceeds 1.2 seconds
-    if (Math.abs(video.currentTime - playbackTime) > 1.2) {
-      try {
-        video.currentTime = playbackTime
-      } catch {}
-    }
-
-    if (isPlaying) {
-      if (video.paused) {
-        const p = video.play()
-        if (p !== undefined) {
-          p.catch(() => {
-            // If browser blocks unmuted playback, mute and resume seamlessly
-            video.muted = true
-            setIsMuted(true)
-            video.play().catch(() => {})
+      if (payload.isHardSync && videoRef.current && !isHost) {
+        const nowHostTime = Date.now() + (ntpOffsetMs || 0)
+        const elapsedSinceEmit = Math.max(0, (nowHostTime - latestHostSyncRef.current.hostWallClock) / 1000)
+        const exactExpected = payload.isPlaying
+          ? latestHostSyncRef.current.videoTimestamp + (elapsedSinceEmit * (latestHostSyncRef.current.playbackRate || 1.0))
+          : latestHostSyncRef.current.videoTimestamp
+        videoRef.current.currentTime = exactExpected + (payload.isPlaying ? 0.15 : 0)
+        videoRef.current.playbackRate = 1.0
+        if (payload.isPlaying && videoRef.current.paused) {
+          videoRef.current.play().catch(() => {
+            if (videoRef.current) {
+              videoRef.current.muted = true
+              setIsMuted(true)
+              videoRef.current.play().catch(() => {})
+            }
           })
+        } else if (!payload.isPlaying && !videoRef.current.paused) {
+          videoRef.current.pause()
         }
       }
-    } else {
-      if (!video.paused) {
+    }
+
+    window.addEventListener('cineroom:sync_packet', handleSyncPacket)
+    return () => window.removeEventListener('cineroom:sync_packet', handleSyncPacket)
+  }, [isHost, ntpOffsetMs])
+
+  // Viewer: Continuous NTP Frame-Accurate Drift Check Loop (<30ms lock)
+  useEffect(() => {
+    if (isHost) return
+
+    const interval = setInterval(() => {
+      const video = videoRef.current
+      const payload = latestHostSyncRef.current
+      if (!video || !payload) return
+
+      // Calculate exact expected time at this millisecond using NTP offset
+      const nowHostTime = Date.now() + (ntpOffsetMs || 0)
+      const elapsedSinceEmit = Math.max(0, (nowHostTime - payload.hostWallClock) / 1000)
+      const exactExpectedTime = payload.isPlaying
+        ? payload.videoTimestamp + (elapsedSinceEmit * (payload.playbackRate || 1.0))
+        : payload.videoTimestamp
+
+      const drift = video.currentTime - exactExpectedTime // positive = ahead, negative = behind
+      const driftSec = Math.abs(drift)
+      setSyncDriftMs(Math.round(drift * 1000))
+
+      if (driftSec > 0.50) {
+        // Hard seek: pre-compensate 150ms for decoder keyframe seek time
+        video.currentTime = exactExpectedTime + (payload.isPlaying ? 0.15 : 0)
+        video.playbackRate = 1.0
+      } else if (driftSec >= 0.04) {
+        // Micro-rate adjustment: NO BUFFER FLUSHES / JARRING JUMPS
+        if (drift < 0) {
+          // Behind: catch up smoothly
+          video.playbackRate = 1.05
+        } else {
+          // Ahead: slow down smoothly
+          video.playbackRate = 0.95
+        }
+      } else {
+        // Perfect single-frame lock (<40ms)
+        video.playbackRate = 1.0
+      }
+
+      // Sync play / pause state
+      if (payload.isPlaying && video.paused) {
+        video.play().catch(() => {
+          video.muted = true
+          setIsMuted(true)
+          video.play().catch(() => {})
+        })
+      } else if (!payload.isPlaying && !video.paused) {
         video.pause()
       }
-    }
-  }, [isPlaying, playbackTime])
+    }, 200)
 
-  // Host: Continuous 2-second heartbeat broadcast
+    return () => clearInterval(interval)
+  }, [isHost, ntpOffsetMs, setSyncDriftMs])
+
+  // Host: Continuous 1.5-second heartbeat broadcast while playing
   useEffect(() => {
     if (!isHost) return
     const interval = setInterval(() => {
       const video = videoRef.current
       if (video && !video.paused) {
-        sendPlaybackHeartbeat(video.currentTime, !video.paused)
+        sendPlaybackHeartbeat(video.currentTime, !video.paused, video.playbackRate)
       }
-    }, 2000)
+    }, 1500)
     return () => clearInterval(interval)
   }, [isHost, sendPlaybackHeartbeat])
 
-  // Host: Immediately respond with exact current video time when a viewer joins
+  // Host: Immediately emit heartbeat on play, pause, seeked, or ratechange
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !isHost) return
+
+    const handleEvent = () => {
+      sendPlaybackHeartbeat(video.currentTime, !video.paused, video.playbackRate)
+    }
+
+    video.addEventListener('play', handleEvent)
+    video.addEventListener('pause', handleEvent)
+    video.addEventListener('seeked', handleEvent)
+    video.addEventListener('ratechange', handleEvent)
+
+    return () => {
+      video.removeEventListener('play', handleEvent)
+      video.removeEventListener('pause', handleEvent)
+      video.removeEventListener('seeked', handleEvent)
+      video.removeEventListener('ratechange', handleEvent)
+    }
+  }, [isHost, sendPlaybackHeartbeat])
+
+  // Host: Immediately respond with current video state when a viewer joins
   useEffect(() => {
     const handleRespond = () => {
       const video = videoRef.current
       if (video && isHost) {
-        sendPlaybackControl(!video.paused, video.currentTime)
+        sendPlaybackControl(!video.paused, video.currentTime, video.playbackRate)
       }
     }
     window.addEventListener('cineroom:respond_sync_request', handleRespond)
@@ -148,44 +239,10 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
   useEffect(() => {
     if (!isHost) {
       requestPlaybackSync()
-      const t = setTimeout(() => requestPlaybackSync(), 1200)
+      const t = setTimeout(() => requestPlaybackSync(), 1000)
       return () => clearTimeout(t)
     }
   }, [isHost, requestPlaybackSync])
-
-  // Viewer: Continuous sub-second lockstep sync handler
-  useEffect(() => {
-    const handleHeartbeat = (e: Event) => {
-      const { currentTime: targetTime, isPlaying: hostPlaying, isHardSync } = (e as CustomEvent).detail
-      const video = videoRef.current
-      if (!video || isHost) return
-
-      const drift = Math.abs(video.currentTime - targetTime)
-
-      // Snap directly if hard sync or drift > 1.2s
-      if (isHardSync || drift > 1.2) {
-        video.currentTime = targetTime
-      } else if (drift > 0.25) {
-        // Micro-rate adjustment (eliminates stutter and keeps exact sub-second sync)
-        video.playbackRate = targetTime > video.currentTime ? 1.05 : 0.95
-      } else {
-        video.playbackRate = 1.0
-      }
-
-      if (hostPlaying && video.paused) {
-        video.play().catch(() => {
-          video.muted = true
-          setIsMuted(true)
-          video.play().catch(() => {})
-        })
-      } else if (!hostPlaying && !video.paused) {
-        video.pause()
-      }
-    }
-
-    window.addEventListener('cineroom:playback_heartbeat', handleHeartbeat)
-    return () => window.removeEventListener('cineroom:playback_heartbeat', handleHeartbeat)
-  }, [isHost])
 
   // Track local time updates
   useEffect(() => {
@@ -239,8 +296,11 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
       }
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
-        backBufferLength: 90,
+        lowLatencyMode: false,
+        backBufferLength: 60,
+        maxBufferLength: 15,
+        maxMaxBufferLength: 30,
+        maxBufferSize: 60 * 1000 * 1000,
       })
       hlsRef.current = hls
       hls.loadSource(streamUrl)

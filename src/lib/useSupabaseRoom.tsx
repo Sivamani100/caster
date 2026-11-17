@@ -16,9 +16,10 @@ interface WebRTCDiagnosticInfo {
 }
 
 interface SupabaseRoomContextType {
-  sendPlaybackControl: (playing: boolean, time: number) => Promise<void>
-  sendPlaybackHeartbeat: (time: number, isPlaying: boolean) => void
+  sendPlaybackControl: (playing: boolean, time: number, rate?: number) => Promise<void>
+  sendPlaybackHeartbeat: (time: number, isPlaying: boolean, rate?: number) => void
   requestPlaybackSync: () => void
+  calibrateClockOffset: () => Promise<void>
   sendMovieChange: (movie: MovieInfo) => Promise<void>
   sendChatMessage: (text: string) => Promise<void>
   sendReaction: (emoji: string) => void
@@ -171,6 +172,11 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     removeStream,
     setWebRTCStatus,
     setActivePeersCount,
+    setSyncDriftMs,
+    setNtpOffsetMs,
+    setNtpRttMs,
+    setIceCandidateType,
+    setRoomConnected,
   } = useCineRoomStore()
 
   const myIdRef = useRef(myId)
@@ -279,8 +285,8 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       return peersRef.current.get(targetPeerId)!
     }
 
-    // Deterministic role: peer with lexicographically lower ID is "polite"
-    const isPolite = myIdRef.current < targetPeerId
+    // Deterministic role: smaller ID is impolite initiator, larger ID is polite
+    const isPolite = myIdRef.current.localeCompare(targetPeerId) > 0
 
     const pc = new RTCPeerConnection({
       iceServers: DEFAULT_ICE_SERVERS,
@@ -342,19 +348,30 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       }
     }
 
-    // Local ICE candidate generation
+    // Local ICE candidate generation with candidate type detection
     pc.onicecandidate = (event) => {
-      if (event.candidate && channelRef.current) {
-        channelRef.current.send({
-          type: 'broadcast',
-          event: 'webrtc_signal',
-          payload: {
-            type: 'candidate',
-            from: myIdRef.current,
-            to: targetPeerId,
-            candidate: event.candidate.toJSON(),
-          },
-        })
+      if (event.candidate) {
+        const candStr = event.candidate.candidate || ''
+        if (candStr.includes('typ relay')) {
+          setIceCandidateType('relay')
+        } else if (candStr.includes('typ srflx')) {
+          setIceCandidateType('srflx')
+        } else if (candStr.includes('typ host')) {
+          setIceCandidateType('host')
+        }
+
+        if (channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'webrtc_signal',
+            payload: {
+              type: 'candidate',
+              from: myIdRef.current,
+              to: targetPeerId,
+              candidate: event.candidate.toJSON(),
+            },
+          })
+        }
       }
     }
 
@@ -520,6 +537,58 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     [getOrCreatePeer, flushCandidates]
   )
 
+  /**
+   * NTP-Style 5-Ping Fast Handshake
+   * Calibrates client clock offset and one-way latency relative to the Host's clock
+   */
+  const calibrateClockOffset = useCallback(async () => {
+    if (isHostRef.current || !channelRef.current) return
+
+    const samples: { offset: number; rtt: number }[] = []
+
+    const handlePong = (e: Event) => {
+      const p = (e as CustomEvent).detail
+      const t2 = Date.now()
+      const rtt = t2 - p.t0
+      const latency = rtt / 2
+      const offset = (p.host_t1 + latency) - t2
+      samples.push({ offset, rtt })
+    }
+
+    window.addEventListener('cineroom:ntp_pong', handlePong)
+
+    // Send 5 rapid pings 60ms apart
+    for (let i = 0; i < 5; i++) {
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'ntp_ping',
+          payload: {
+            from: myIdRef.current,
+            t0: Date.now(),
+            seq: i,
+          },
+        })
+      }
+      await new Promise((r) => setTimeout(r, 60))
+    }
+
+    // Wait a brief window for final pongs to return
+    await new Promise((r) => setTimeout(r, 120))
+    window.removeEventListener('cineroom:ntp_pong', handlePong)
+
+    if (samples.length > 0) {
+      // Pick the sample with the lowest RTT (cleanest network trip)
+      samples.sort((a, b) => a.rtt - b.rtt)
+      const best = samples[0]
+      setNtpOffsetMs(Math.round(best.offset))
+      setNtpRttMs(Math.round(best.rtt))
+      console.log(
+        `[NTP Calibration] Calibrated with Host. Offset: ${Math.round(best.offset)}ms, RTT: ${Math.round(best.rtt)}ms`
+      )
+    }
+  }, [setNtpOffsetMs, setNtpRttMs])
+
   // Initialize Room & Realtime Channel
   useEffect(() => {
     if (!roomId) return
@@ -647,21 +716,48 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         }
       })
 
+      // NTP Ping (Host handles ping from viewer)
+      channel.on('broadcast', { event: 'ntp_ping' }, ({ payload }) => {
+        if (!payload || !isHostRef.current) return
+        if (channelRef.current) {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'ntp_pong',
+            payload: {
+              to: payload.from,
+              t0: payload.t0,
+              host_t1: Date.now(),
+              seq: payload.seq,
+            },
+          })
+        }
+      })
+
+      // NTP Pong (Viewer receives pong from host)
+      channel.on('broadcast', { event: 'ntp_pong' }, ({ payload }) => {
+        if (!payload || payload.to !== myIdRef.current) return
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('cineroom:ntp_pong', { detail: payload })
+          )
+        }
+      })
+
       // Broadcast Playback Sync (Direct Play / Pause / Seek)
       channel.on('broadcast', { event: 'playback_sync' }, ({ payload }) => {
         if (!payload) return
+        const vTime = payload.videoTimestamp ?? payload.currentTime
         setIsPlaying(payload.isPlaying)
-        setPlaybackTime(payload.currentTime)
+        setPlaybackTime(vTime)
         if (payload.hostName) {
           setHostInfo(payload.hostId || '', payload.hostName)
         }
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
-            new CustomEvent('cineroom:playback_heartbeat', {
+            new CustomEvent('cineroom:sync_packet', {
               detail: {
-                currentTime: payload.currentTime,
-                isPlaying: payload.isPlaying,
-                timestamp: payload.timestamp || Date.now(),
+                ...payload,
+                videoTimestamp: vTime,
                 isHardSync: true,
               },
             })
@@ -674,11 +770,10 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         if (!payload) return
         if (!isHostRef.current && typeof window !== 'undefined') {
           window.dispatchEvent(
-            new CustomEvent('cineroom:playback_heartbeat', {
+            new CustomEvent('cineroom:sync_packet', {
               detail: {
-                currentTime: payload.currentTime,
-                isPlaying: payload.isPlaying,
-                timestamp: payload.timestamp || Date.now(),
+                ...payload,
+                videoTimestamp: payload.videoTimestamp ?? payload.currentTime,
                 isHardSync: false,
               },
             })
@@ -740,6 +835,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       channel.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           isSubscribedRef.current = true
+          setRoomConnected(true)
           await channel.track({
             id: myIdRef.current || `viewer-${Date.now()}`,
             name: myNameRef.current || 'Viewer',
@@ -748,6 +844,11 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
             isHost: isHostRef.current,
             joinedAt: joinedAtRef.current,
           })
+          if (!isHostRef.current) {
+            setTimeout(() => {
+              calibrateClockOffset()
+            }, 300)
+          }
         }
       })
     }
@@ -757,6 +858,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
     return () => {
       isMounted = false
       isSubscribedRef.current = false
+      setRoomConnected(false)
       peersRef.current.forEach((entry) => entry.pc.close())
       peersRef.current.clear()
       if (channelRef.current) {
@@ -1053,7 +1155,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   }, [])
 
   const sendPlaybackControl = useCallback(
-    async (playing: boolean, time: number) => {
+    async (playing: boolean, time: number, rate: number = 1.0) => {
       setIsPlaying(playing)
       setPlaybackTime(time)
 
@@ -1064,6 +1166,9 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
           payload: {
             isPlaying: playing,
             currentTime: time,
+            videoTimestamp: time,
+            hostWallClock: Date.now(),
+            playbackRate: rate,
             hostId: myIdRef.current,
             hostName: myNameRef.current,
             timestamp: Date.now(),
@@ -1086,24 +1191,30 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
   )
 
   /**
-   * Broadcast periodic heartbeat (every ~2s) while playing so all peers
-   * stay continuously locked to the exact same second without clock drift.
+   * Broadcast periodic heartbeat (every 1.5s) while playing so all peers
+   * stay continuously locked to the exact same frame without clock drift.
    */
-  const sendPlaybackHeartbeat = useCallback((time: number, isPlaying: boolean) => {
-    if (channelRef.current && isHostRef.current) {
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'playback_heartbeat',
-        payload: {
-          currentTime: time,
-          isPlaying,
-          hostId: myIdRef.current,
-          hostName: myNameRef.current,
-          timestamp: Date.now(),
-        },
-      })
-    }
-  }, [])
+  const sendPlaybackHeartbeat = useCallback(
+    (time: number, isPlaying: boolean, rate: number = 1.0) => {
+      if (channelRef.current && isHostRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'playback_heartbeat',
+          payload: {
+            currentTime: time,
+            videoTimestamp: time,
+            isPlaying,
+            hostWallClock: Date.now(),
+            playbackRate: rate,
+            hostId: myIdRef.current,
+            hostName: myNameRef.current,
+            timestamp: Date.now(),
+          },
+        })
+      }
+    },
+    []
+  )
 
   /**
    * Request host to immediately broadcast current playback time
@@ -1226,6 +1337,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
         sendPlaybackControl,
         sendPlaybackHeartbeat,
         requestPlaybackSync,
+        calibrateClockOffset,
         sendMovieChange,
         sendChatMessage,
         sendReaction,
@@ -1249,6 +1361,7 @@ export function useSupabaseRoom() {
       sendPlaybackControl: async () => {},
       sendPlaybackHeartbeat: () => {},
       requestPlaybackSync: () => {},
+      calibrateClockOffset: async () => {},
       sendMovieChange: async () => {},
       sendChatMessage: async () => {},
       sendReaction: () => {},
