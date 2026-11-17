@@ -70,29 +70,79 @@ interface PeerEntry {
 }
 
 /**
+ * Dedicated Remote Audio Item:
+ * Binds an isolated HTML5 Audio element to a peer's MediaStream.
+ * Avoids load-abort interruptions by only updating srcObject on reference changes,
+ * and handles browser autoplay policies gracefully.
+ */
+function RemoteAudioItem({ peerId, stream }: { peerId: string; stream: MediaStream }) {
+  const audioRef = useRef<HTMLAudioElement>(null)
+
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el || !stream) return
+
+    if (el.srcObject !== stream) {
+      el.srcObject = stream
+    }
+
+    el.volume = 1.0
+    el.muted = false
+
+    const playAudio = () => {
+      if (el.paused) {
+        el.play().catch((err) => {
+          // Expected before user gesture interaction; unlocked on first click
+          console.warn(`[WebRTC Audio] Peer ${peerId} audio deferred:`, err.message)
+        })
+      }
+    }
+
+    playAudio()
+
+    const aTracks = stream.getAudioTracks()
+    aTracks.forEach((t) => {
+      t.onunmute = playAudio
+    })
+  }, [stream, peerId])
+
+  return (
+    <audio
+      ref={audioRef}
+      autoPlay
+      playsInline
+      data-peer-id={peerId}
+    />
+  )
+}
+
+/**
  * Headless Remote Audio Renderer:
  * Ensures all connected peers' audio streams play uninterruptedly,
- * using an unthrottled fixed offscreen container with persistent
- * gesture listeners to safely unlock browser autoplay policies.
+ * using an offscreen container with persistent gesture listeners
+ * to safely unlock browser autoplay policies.
  */
 function RemoteAudioRenderer() {
-  const { streams, myId } = useCineRoomStore()
-  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
+  const streams = useCineRoomStore((s) => s.streams)
+  const myId = useCineRoomStore((s) => s.myId)
 
   // Continuously unlock browser audio autoplay upon user interaction
   useEffect(() => {
     const unlockAutoplay = () => {
-      audioRefs.current.forEach((el) => {
+      const audioElements = document.querySelectorAll<HTMLAudioElement>('audio[data-peer-id]')
+      audioElements.forEach((el) => {
         if (el && el.paused) {
+          el.muted = false
+          el.volume = 1.0
           el.play().catch(() => {})
         }
       })
     }
 
-    window.addEventListener('pointerdown', unlockAutoplay)
-    window.addEventListener('click', unlockAutoplay)
-    window.addEventListener('touchstart', unlockAutoplay)
-    window.addEventListener('keydown', unlockAutoplay)
+    window.addEventListener('pointerdown', unlockAutoplay, { passive: true })
+    window.addEventListener('click', unlockAutoplay, { passive: true })
+    window.addEventListener('touchstart', unlockAutoplay, { passive: true })
+    window.addEventListener('keydown', unlockAutoplay, { passive: true })
 
     return () => {
       window.removeEventListener('pointerdown', unlockAutoplay)
@@ -118,25 +168,7 @@ function RemoteAudioRenderer() {
       aria-hidden="true"
     >
       {remoteEntries.map(([peerId, stream]) => (
-        <audio
-          key={peerId}
-          autoPlay
-          playsInline
-          ref={(el) => {
-            if (el) {
-              audioRefs.current.set(peerId, el)
-              if (el.srcObject !== stream) {
-                el.srcObject = stream
-              }
-              el.volume = 1.0
-              el.play().catch((err) => {
-                console.warn(`[WebRTC Audio] Peer ${peerId} audio waiting for gesture:`, err.message)
-              })
-            } else {
-              audioRefs.current.delete(peerId)
-            }
-          }}
-        />
+        <RemoteAudioItem key={peerId} peerId={peerId} stream={stream} />
       ))}
     </div>
   )
@@ -303,25 +335,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
 
     peersRef.current.set(targetPeerId, peerEntry)
 
-    // Add audio and video transceivers immediately so SDP offers/answers include media sections
-    pc.addTransceiver('audio', { direction: 'sendrecv' })
-    pc.addTransceiver('video', { direction: 'sendrecv' })
-
-    // Attach local media tracks if active to the pre-created transceivers
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        const transceiver = pc
-          .getTransceivers()
-          .find((t) => t.receiver.track.kind === track.kind)
-        if (transceiver && transceiver.sender) {
-          transceiver.direction = 'sendrecv'
-          transceiver.sender.replaceTrack(track).catch(() => {})
-        }
-      })
-      optimizeSenders(pc)
-    }
-
-    // Perfect Negotiation onnegotiationneeded handler
+    // 1. Perfect Negotiation onnegotiationneeded handler (Registered BEFORE adding transceivers)
     pc.onnegotiationneeded = async () => {
       try {
         peerEntry.makingOffer = true
@@ -346,6 +360,32 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       } finally {
         peerEntry.makingOffer = false
       }
+    }
+
+    // 2. Add audio and video transceivers directly binding local tracks if available
+    const localAudio = localStreamRef.current?.getAudioTracks()[0] || null
+    const localVideo = localStreamRef.current?.getVideoTracks()[0] || null
+
+    if (localAudio) {
+      pc.addTransceiver(localAudio, { direction: 'sendrecv' })
+    } else {
+      pc.addTransceiver('audio', { direction: 'sendrecv' })
+    }
+
+    if (localVideo) {
+      pc.addTransceiver(localVideo, { direction: 'sendrecv' })
+    } else {
+      pc.addTransceiver('video', { direction: 'sendrecv' })
+    }
+    optimizeSenders(pc)
+
+    // 3. Impolite initiator peer kicks off handshake promptly
+    if (!isPolite) {
+      setTimeout(() => {
+        if (peerEntry.pc.signalingState === 'stable') {
+          renegotiatePeer(peerEntry, targetPeerId)
+        }
+      }, 50)
     }
 
     // Local ICE candidate generation with candidate type detection
@@ -387,34 +427,22 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       // Replace existing track of same kind if already present
       const existingTrack = peerStream.getTracks().find((t) => t.kind === event.track.kind)
       if (existingTrack && existingTrack.id !== event.track.id) {
-        peerStream.removeTrack(existingTrack)
+        try { peerStream.removeTrack(existingTrack) } catch {}
       }
       if (!peerStream.getTracks().some((t) => t.id === event.track.id)) {
         peerStream.addTrack(event.track)
       }
 
-      const syncStream = () => {
-        const fresh = new MediaStream(peerStream!.getTracks())
-        setStream(targetPeerId, fresh)
-      }
-
-      event.track.onunmute = () => {
-        console.log(`[WebRTC] Track unmuted (${event.track.kind}) from ${targetPeerId}`)
-        syncStream()
-      }
-
-      event.track.onmute = () => {
-        console.log(`[WebRTC] Track muted (${event.track.kind}) from ${targetPeerId}`)
-        syncStream()
-      }
+      // Keep stable MediaStream reference so audio elements are never load-aborted
+      setStream(targetPeerId, peerStream)
 
       event.track.onended = () => {
         console.log(`[WebRTC] Track ended (${event.track.kind}) from ${targetPeerId}`)
-        peerStream?.removeTrack(event.track)
-        syncStream()
+        try { peerStream?.removeTrack(event.track) } catch {}
+        if (peerStream) {
+          setStream(targetPeerId, peerStream)
+        }
       }
-
-      syncStream()
     }
 
     // Connection state & ICE recovery
@@ -447,7 +475,7 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
 
     updateAggregatedStatus()
     return peerEntry
-  }, [setStream, removeStream, updateAggregatedStatus, optimizeSenders])
+  }, [setStream, removeStream, updateAggregatedStatus, optimizeSenders, renegotiatePeer])
 
   // Flush queued ICE candidates for a peer
   const flushCandidates = useCallback(async (entry: PeerEntry) => {
@@ -960,7 +988,9 @@ export function SupabaseRoomProvider({ roomId, children }: { roomId: string; chi
       })
 
       setHasAudio(micOn)
+      hasAudioRef.current = micOn
       setHasVideo(actualVideo)
+      hasVideoRef.current = actualVideo
 
       // Attach or replace tracks on all active peer connections and renegotiate
       peersRef.current.forEach(async (entry, peerId) => {

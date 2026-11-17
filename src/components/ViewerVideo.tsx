@@ -17,7 +17,6 @@ interface ViewerVideoProps {
 
 export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const audioRef = useRef<HTMLAudioElement>(null)
   const [hasLiveVideoTrack, setHasLiveVideoTrack] = useState(false)
 
   // Listen for video tracks dynamically
@@ -62,16 +61,6 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
     }
   }, [stream, shouldRenderVideo, user.name])
 
-  // Attach and play audio stream for remote participants
-  useEffect(() => {
-    if (audioRef.current && stream && !isLocal) {
-      audioRef.current.srcObject = stream
-      audioRef.current.play().catch((err) => {
-        console.warn(`[ViewerVideo ${user.name}] Audio play waiting for gesture:`, err.message)
-      })
-    }
-  }, [stream, isLocal, user.name])
-
   const isMuted = user.hasAudio === false
 
   return (
@@ -79,11 +68,6 @@ export default function ViewerVideo({ user, stream, isLocal = false }: ViewerVid
       className="relative rounded-xl overflow-hidden bg-[#101014] border border-white/[0.08] shadow-md flex items-center justify-center select-none w-full h-full"
       style={{ aspectRatio: '16/10' }}
     >
-      {/* Remote Audio Track (always active even if video is off) */}
-      {!isLocal && stream && (
-        <audio ref={audioRef} autoPlay playsInline />
-      )}
-
       {/* Video Stream - Always muted={true} so browser autoplay never blocks live 30fps frames */}
       {shouldRenderVideo ? (
         <video

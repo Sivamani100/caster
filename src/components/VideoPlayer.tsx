@@ -43,6 +43,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     isHost,
     hostName,
     isPlaying,
+    setIsPlaying,
     playbackTime,
     localStream,
     hasVideo,
@@ -98,6 +99,28 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
       setTimeout(() => setCopiedLink(false), 2000)
     }
   }
+
+  // Synchronize HTML5 video element directly with isPlaying state
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    if (isPlaying) {
+      if (video.paused) {
+        video.play().catch(() => {
+          if (videoRef.current) {
+            videoRef.current.muted = true
+            setIsMuted(true)
+            videoRef.current.play().catch(() => {})
+          }
+        })
+      }
+    } else {
+      if (!video.paused) {
+        video.pause()
+      }
+    }
+  }, [isPlaying])
 
   // Listen for sync packets from Host (both periodic heartbeats and immediate actions)
   useEffect(() => {
@@ -345,7 +368,19 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     }
 
     const nextState = !isPlaying
-    sendPlaybackControl(nextState, video.currentTime)
+    setIsPlaying(nextState)
+
+    if (nextState) {
+      video.play().catch(() => {
+        video.muted = true
+        setIsMuted(true)
+        video.play().catch(() => {})
+      })
+    } else {
+      video.pause()
+    }
+
+    sendPlaybackControl(nextState, video.currentTime, video.playbackRate || 1.0)
   }
 
   // Seek on timeline
@@ -359,7 +394,8 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     if (videoRef.current) {
       videoRef.current.currentTime = target
     }
-    sendPlaybackControl(isPlaying, target)
+    setCurrentTime(target)
+    sendPlaybackControl(isPlaying, target, videoRef.current?.playbackRate || 1.0)
   }
 
   // YouTube-style 10s skip forward / backward
@@ -376,7 +412,7 @@ export default function VideoPlayer({ roomId }: VideoPlayerProps) {
     const newTime = Math.max(0, Math.min(duration || 596, video.currentTime + seconds))
     video.currentTime = newTime
     setCurrentTime(newTime)
-    sendPlaybackControl(isPlaying, newTime)
+    sendPlaybackControl(isPlaying, newTime, video.playbackRate || 1.0)
   }
 
   const toggleMute = () => {
